@@ -26,7 +26,7 @@ generalises that into a small package you can extend per deception type.
 
 The proxy (LiteLLM) can't do this. Probes need the residual stream, which only a
 locally loaded model exposes. So everything here runs a model locally (tiny one on a
-laptop, bigger one on OSC when you want real numbers).
+laptop, bigger one on OSC when we want real numbers).
 
 ---
 
@@ -92,7 +92,7 @@ pip install -e ".[dev]"
 pytest -q                    # should pass in seconds, no model download
 ```
 
-Then a real run:
+Then:
 
 ```bash
 # one behaviour, writes results/report_sycophancy_lr.png
