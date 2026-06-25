@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# results: keep the folder, ignore the heavy outputs
+results/*
+!results/.gitkeep
+
+# model/activation caches
+*.npy
+.cache/
+~/.cache/huggingface/
+
+# private local notes for Claude Code, not for the team
+CLAUDE.local.md

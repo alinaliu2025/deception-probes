@@ -1,0 +1,22 @@
+[project]
+name = "dprobe"
+version = "0.1.0"
+description = "Single-turn deception probes for sycophancy, sandbagging, and omission"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers",
+    "scikit-learn",
+    "numpy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
