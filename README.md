@@ -58,7 +58,11 @@ check on the grid above.
  
 ## Setup (do this once)
  
-Type all these commands in your terminal (this works for Mac, I am not certain about other OS) If something errors, check the **"If you hit an error"** list right after, it covers some problems I ran into.
+Type all these commands in your terminal. If something errors, check the **"If you hit an error"** list right after, it covers some problems I ran into.
+
+> **Windows users:** open **PowerShell** (not Command Prompt) for all commands below. The only step that differs from Mac is step 2.
+>
+> **Mac users:** use Terminal as normal.
  
 You need Python 3.9 or newer installed. To check, type `python --version`.
  
@@ -74,19 +78,44 @@ cd deception-probes
 **2. Make a clean, private workspace for this project's tools (a "virtual environment").**
  
 This keeps this project's libraries separate from everything else on your machine.
-(Keep in mind this only works for mac)
+
+**On Windows (PowerShell):**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks the second line with a message about "running scripts is disabled," run this once first, then try again:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**On Mac:**
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
- 
-After the second line, your Terminal prompt should show `(.venv)` at the start. That means
-the workspace is active. You have to run that `source` line every time you open a new
-Terminal to work on this.
+
+After the activation line, your terminal prompt should show `(.venv)` at the start. That means
+the workspace is active. You have to run the activation line every time you open a new
+terminal to work on this.
  
 **3. Install the project and its tools.**
- 
+
+**On Windows (PowerShell):**
+
+```powershell
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+(Use `python -m pip` instead of bare `pip` for the upgrade step — Windows venvs block the shorter form.)
+
+**On Mac:**
+
 ```bash
 pip install --upgrade pip
 pip install -e ".[dev]"
@@ -106,7 +135,8 @@ download the model, it just confirms the plumbing is connected.
 These are the real ones people run into, with the fix:
  
 - **`externally-managed-environment` or a message about PEP 668:** you are not inside the
-  workspace. Run `source .venv/bin/activate` (you should see `(.venv)`) and try again.
+  workspace. Activate it (you should see `(.venv)`) and try again.
+  Mac: `source .venv/bin/activate` — Windows: `.venv\Scripts\Activate.ps1`
 - **`Package requires a different Python` or `editable mode requires setuptools`:** your
   `pip` is old. The `pip install --upgrade pip` line in step 3 fixes it; make sure you ran it.
 - **`No module named 'dprobe'` when running tests:** you are accidentally using a different

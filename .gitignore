@@ -16,3 +16,4 @@ results/*
 
 # private local notes for Claude Code, not for the team
 CLAUDE.local.md
+.claude/
