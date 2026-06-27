@@ -27,6 +27,9 @@ def load_model(name: str = MODEL_NAME, device: str | None = None):
     """Returns (model, tokenizer, device). Call once, reuse for every dataset."""
     device = device or get_device()
     tokenizer = AutoTokenizer.from_pretrained(name)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
         name, torch_dtype=torch.float32 if device != "cuda" else torch.float16
     ).to(device)
@@ -49,29 +52,31 @@ def build_prompt(tokenizer, ex: Example) -> str:
     )
 
 
-@torch.no_grad()
-def _activations_for_prompt(model, tokenizer, prompt: str, device: str) -> np.ndarray:
-    """Last-token residual stream for every layer -> array [n_layers+1, hidden]."""
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    out = model(**inputs, output_hidden_states=True)
-    hs = torch.stack([h[0, -1, :].float().cpu() for h in out.hidden_states])
-    return hs.numpy()
+def extract(model, tokenizer, examples: list[Example], device: str,
+            verbose: bool = True, batch_size: int = 32):
+    """Run every example through the model in batches.
 
-
-def extract(model, tokenizer, examples: list[Example], device: str, verbose: bool = True):
-    """Run every example through the model.
+    Left-padding means every sequence's last real token sits at position -1,
+    so we extract h[:, -1, :] without tracking per-example lengths.
 
     Returns:
         acts:   float array [n_examples, n_layers+1, hidden]
         labels: int array   [n_examples]   (1 = deceptive condition, 0 = control)
     """
     acts, labels = [], []
-    for i, ex in enumerate(examples, 1):
-        prompt = build_prompt(tokenizer, ex)
-        acts.append(_activations_for_prompt(model, tokenizer, prompt, device))
-        labels.append(ex.label)
+    for start in range(0, len(examples), batch_size):
+        batch = examples[start:start + batch_size]
+        prompts = [build_prompt(tokenizer, ex) for ex in batch]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            out = model(**inputs, output_hidden_states=True)
+        for i, ex in enumerate(batch):
+            hs = torch.stack([h[i, -1, :].float().cpu() for h in out.hidden_states])
+            acts.append(hs.numpy())
+            labels.append(ex.label)
         if verbose:
-            print(f"  {i}/{len(examples)}", end="\r", flush=True)
+            done = min(start + batch_size, len(examples))
+            print(f"  {done}/{len(examples)}", end="\r", flush=True)
     if verbose:
         print()
     return np.stack(acts), np.array(labels)
