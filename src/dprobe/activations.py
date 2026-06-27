@@ -23,6 +23,23 @@ def get_device() -> str:
     return "cpu"
 
 
+def _pick_dtype(device: str):
+    """Pick the fastest safe dtype for the device.
+
+    Pascal consumer GPUs (compute 6.x, e.g. GTX 1070 Ti) run fp16 at ~1/64 the
+    fp32 rate -> fp16 there is catastrophically slow. Only use fp16 on Volta+
+    (compute >= 7.0) and bf16 on Ampere+ (compute >= 8.0). Everything else fp32.
+    """
+    if device != "cuda":
+        return torch.float32
+    major, _ = torch.cuda.get_device_capability()
+    if major >= 8:
+        return torch.bfloat16
+    if major >= 7:
+        return torch.float16
+    return torch.float32
+
+
 def load_model(name: str = MODEL_NAME, device: str | None = None):
     """Returns (model, tokenizer, device). Call once, reuse for every dataset."""
     device = device or get_device()
@@ -31,7 +48,7 @@ def load_model(name: str = MODEL_NAME, device: str | None = None):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        name, torch_dtype=torch.float32 if device != "cuda" else torch.float16
+        name, torch_dtype=_pick_dtype(device)
     ).to(device)
     model.eval()
     return model, tokenizer, device

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 
 TEST_FRAC = 0.3
 SEED = 0
