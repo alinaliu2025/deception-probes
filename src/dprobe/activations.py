@@ -39,6 +39,11 @@ def build_prompt(tokenizer, ex: Example) -> str:
         {"role": "system", "content": ex.system},
         {"role": "user", "content": ex.user},
     ]
+    if ex.completion is not None:
+        messages.append({"role": "assistant", "content": ex.completion})
+        return tokenizer.apply_chat_template(
+            messages, add_generation_prompt=False, tokenize=False
+        )
     return tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, tokenize=False
     )

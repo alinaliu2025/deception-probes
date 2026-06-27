@@ -29,6 +29,10 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
 - One type: `python -m scripts.train_one --type sycophancy`
 - Full comparison: `python -m scripts.compare --method lr`
 
+## ADRs
+
+Architecture Decision Records live in `.claude/docs/adr/`. Use sequential numbering (`0001-`, `0002-`, …).
+
 ## Conventions
 
 - Label **1 = deceptive condition, 0 = control**. Never flip this.

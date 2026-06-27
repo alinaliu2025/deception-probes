@@ -21,6 +21,7 @@ class Example:
     user: str
     label: int               # 1 = deceptive condition, 0 = control
     deception_type: str
+    completion: str | None = None  # if set, extract at response-final token instead of prompt-final
     meta: dict = field(default_factory=dict)  # e.g. correct answer, for capability filtering
 
 
