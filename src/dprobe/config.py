@@ -2,9 +2,7 @@
 
 from pathlib import Path
 
-# ~1GB, not gated, runs on a laptop CPU/MPS. Bump to Qwen2.5-1.5B-Instruct once
-# the pipeline works end to end and you have OSC GPU time.
-MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
 TEST_FRAC = 0.3
 SEED = 0
