@@ -12,6 +12,7 @@ dependencies = [
     "scikit-learn",
     "numpy<2",
     "matplotlib",
+    "datasets",
 ]
 
 [project.optional-dependencies]
