@@ -94,5 +94,5 @@ def extract(model, tokenizer, examples: list[Example], device: str,
     labels_ordered.sort(key=lambda x: x[0])
     return (
         np.stack([a for _, a in acts_ordered]),
-        np.array([l for _, l in labels_ordered]),
+        np.array([lab for _, lab in labels_ordered]),
     )
