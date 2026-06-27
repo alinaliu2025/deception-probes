@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 @dataclass
@@ -40,13 +41,23 @@ def fit_mms(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str) -> Pr
 
 
 def fit_lr(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str, C: float = 1.0) -> Probe:
-    """Logistic-regression probe. Its weight vector becomes the direction."""
-    clf = LogisticRegression(max_iter=2000, C=C).fit(X, y)
-    w = clf.coef_[0]
+    """Logistic-regression probe. Its weight vector becomes the direction.
+
+    Residual-stream dimensions have wildly different scales, so we standardize
+    before fitting: that is what lets lbfgs actually converge and makes the L2
+    penalty hit every feature evenly. We then fold the scaler back into a single
+    raw-activation linear functional, so the stored direction stays in raw space
+    and remains directly comparable across types for the transfer study.
+    """
+    scaler = StandardScaler().fit(X)
+    clf = LogisticRegression(max_iter=2000, C=C).fit(scaler.transform(X), y)
+    # undo standardization: w_s·(x-mu)/sigma + b_s == (w_s/sigma)·x + (b_s - (w_s/sigma)·mu)
+    w = clf.coef_[0] / scaler.scale_
+    intercept = float(clf.intercept_[0] - w @ scaler.mean_)
     norm = np.linalg.norm(w) + 1e-8
     direction = w / norm
-    # fold the sklearn intercept into the projected-space bias
-    bias = float(-clf.intercept_[0] / norm)
+    # fold the (raw-space) intercept into the projected-space bias
+    bias = float(-intercept / norm)
     return Probe(direction, bias, layer, "lr", deception_type)
 
 

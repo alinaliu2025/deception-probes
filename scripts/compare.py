@@ -32,7 +32,8 @@ def main():
         examples = data.get(t)
         print(f"\n[{t}] extracting {len(examples)} examples ...")
         A, y = extract(model, tokenizer, examples, device)
-        aurocs, bl, probe = layer_sweep(A, y, args.method, t)
+        groups = [ex.user for ex in examples]
+        aurocs, bl, probe = layer_sweep(A, y, args.method, t, groups)
         print(f"[{t}] best layer {bl} | AUROC {aurocs[bl]:.3f}")
         acts[t], labels[t], probes[t] = A, y, probe
 

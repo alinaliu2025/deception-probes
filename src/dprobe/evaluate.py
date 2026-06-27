@@ -10,25 +10,39 @@ from __future__ import annotations
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from .config import SEED, TEST_FRAC
 from .probes import FITTERS, Probe
 
 
-def split(n: int, labels: np.ndarray):
+def split(n: int, labels: np.ndarray, groups: np.ndarray | None = None):
+    """Train/test index split.
+
+    With `groups` (one key per row, e.g. the shared `user` field of a matched
+    pair), split by whole groups so a question's positive and negative halves --
+    which share the entire prompt prefix -- never straddle train and test. That
+    keeps the held-out set genuinely independent. Whole grouped pairs are
+    label-balanced by construction, so no stratification is needed. Without
+    groups we fall back to a stratified row-wise split.
+    """
     idx = np.arange(n)
-    return train_test_split(idx, test_size=TEST_FRAC, random_state=SEED, stratify=labels)
+    if groups is None:
+        return train_test_split(idx, test_size=TEST_FRAC, random_state=SEED, stratify=labels)
+    gss = GroupShuffleSplit(n_splits=1, test_size=TEST_FRAC, random_state=SEED)
+    tr, te = next(gss.split(idx, labels, groups))
+    return tr, te
 
 
-def layer_sweep(acts: np.ndarray, labels: np.ndarray, method: str, deception_type: str):
+def layer_sweep(acts: np.ndarray, labels: np.ndarray, method: str, deception_type: str,
+                groups: np.ndarray | None = None):
     """Fit a probe at every layer, return (auroc_per_layer, best_layer, best_probe).
 
     AUROC is computed on a held-out split so the best layer isn't cherry-picked
-    on training data.
+    on training data. Pass `groups` (per-row pair keys) to hold out whole prompts.
     """
     n_layers = acts.shape[1]
-    tr, te = split(len(labels), labels)
+    tr, te = split(len(labels), labels, groups)
     aurocs = []
     best = {"layer": -1, "auroc": -1.0, "probe": None}
     for layer in range(n_layers):
