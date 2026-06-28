@@ -35,6 +35,9 @@ def main():
     ap.add_argument("--batch-size", type=int, default=None,
                     help="extraction batch size; default auto-picks from GPU VRAM. "
                          "Lower it if a long sequence length OOMs.")
+    ap.add_argument("--C", type=float, default=None,
+                    help="lr only: inverse L2 strength. Lower (e.g. 0.1) converges "
+                         "fast on near-separable data; default keeps sklearn C=1.0.")
     args = ap.parse_args()
 
     model_name = args.model or MODEL_NAME
@@ -63,7 +66,7 @@ def main():
     # hold out whole prompts: a pair's two halves share `user`, so this keeps
     # them on the same side of the split (genuinely independent held-out set)
     groups = [ex.user for ex in examples]
-    aurocs, best_layer, probe = layer_sweep(acts, labels, args.method, args.type, groups)
+    aurocs, best_layer, probe = layer_sweep(acts, labels, args.method, args.type, groups, C=args.C)
     print(f"best layer {best_layer} | held-out AUROC {aurocs[best_layer]:.3f}")
 
     # immutable, self-describing run dir; meta.json is the part tracked in git

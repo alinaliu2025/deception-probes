@@ -35,26 +35,31 @@ def split(n: int, labels: np.ndarray, groups: np.ndarray | None = None):
 
 
 def layer_sweep(acts: np.ndarray, labels: np.ndarray, method: str, deception_type: str,
-                groups: np.ndarray | None = None):
+                groups: np.ndarray | None = None, C: float | None = None):
     """Fit a probe at every layer, return (auroc_per_layer, best_layer, best_probe).
 
     AUROC is computed on a held-out split so the best layer isn't cherry-picked
     on training data. Pass `groups` (per-row pair keys) to hold out whole prompts.
+
+    `C` (lr only) is the inverse-regularization strength; lower = stronger L2.
+    Near-separable high-dim activations make lbfgs run to its iteration cap at the
+    default C=1.0 (slow, ConvergenceWarning); a smaller C converges fast and cleanly.
     """
+    fit_kwargs = {"C": C} if (method == "lr" and C is not None) else {}
     n_layers = acts.shape[1]
     tr, te = split(len(labels), labels, groups)
     aurocs = []
     best = {"layer": -1, "auroc": -1.0, "probe": None}
     for layer in range(n_layers):
         X = acts[:, layer, :]
-        probe = FITTERS[method](X[tr], labels[tr], layer, deception_type)
+        probe = FITTERS[method](X[tr], labels[tr], layer, deception_type, **fit_kwargs)
         auroc = roc_auc_score(labels[te], probe.score(X[te]))
         aurocs.append(auroc)
         if auroc > best["auroc"]:
             best = {"layer": layer, "auroc": auroc, "probe": probe}
     # refit the winning probe on ALL data so it's the strongest version for transfer
     bl = best["layer"]
-    best_probe = FITTERS[method](acts[:, bl, :], labels, bl, deception_type)
+    best_probe = FITTERS[method](acts[:, bl, :], labels, bl, deception_type, **fit_kwargs)
     return np.array(aurocs), bl, best_probe
 
 

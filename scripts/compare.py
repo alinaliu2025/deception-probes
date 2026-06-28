@@ -29,6 +29,9 @@ def main():
     ap.add_argument("--batch-size", type=int, default=None,
                     help="extraction batch size; default auto-picks from GPU VRAM. "
                          "Lower it if a long sequence length OOMs.")
+    ap.add_argument("--C", type=float, default=None,
+                    help="lr only: inverse L2 strength. Lower (e.g. 0.1) converges "
+                         "fast on near-separable data; default keeps sklearn C=1.0.")
     args = ap.parse_args()
 
     model_name = args.model or MODEL_NAME
@@ -41,7 +44,7 @@ def main():
         print(f"\n[{t}] extracting {len(examples)} examples ...")
         A, y = extract(model, tokenizer, examples, device, batch_size=args.batch_size)
         groups = [ex.user for ex in examples]
-        aurocs, bl, probe = layer_sweep(A, y, args.method, t, groups)
+        aurocs, bl, probe = layer_sweep(A, y, args.method, t, groups, C=args.C)
         print(f"[{t}] best layer {bl} | AUROC {aurocs[bl]:.3f}")
         acts[t], labels[t], probes[t] = A, y, probe
         summary[t] = {"n_examples": int(len(y)), "n_groups": int(len(set(groups))),
