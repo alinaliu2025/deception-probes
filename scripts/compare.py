@@ -21,7 +21,7 @@ from dprobe.plotting import report_comparison
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std"])
+    ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std", "lda"])
     ap.add_argument("--model", default=None,
                     help="HuggingFace model id to probe; overrides config.MODEL_NAME "
                          "for this run only (e.g. Qwen/Qwen2.5-7B-Instruct). Default "

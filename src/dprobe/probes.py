@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
@@ -65,6 +66,27 @@ def fit_mms_std(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str) -
     return Probe(direction, bias, layer, "mms_std", deception_type)
 
 
+def fit_lda(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str) -> Probe:
+    """Linear-discriminant-analysis probe: the full-covariance difference-of-means.
+
+    direction == Sigma^-1 (mean_pos - mean_neg), where Sigma is the pooled
+    within-class covariance. Where ``fit_mms`` uses no covariance and
+    ``fit_mms_std`` whitens only the diagonal (per-dim variance), LDA whitens the
+    full covariance, so it credits correlated combinations of dimensions instead
+    of treating each dim independently. That is what diff-in-means is missing
+    relative to LR. Sigma is hidden x hidden and ill-conditioned at this n, so we
+    use Ledoit-Wolf shrinkage (``shrinkage="auto"``) to keep the inverse stable.
+    The lsqr solver yields a raw-space ``coef_``/``intercept_`` we fold into the
+    Probe exactly like ``fit_lr``, so the direction stays comparable for transfer.
+    """
+    clf = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto").fit(X, y)
+    w = clf.coef_[0]
+    norm = np.linalg.norm(w) + 1e-8
+    direction = w / norm
+    bias = float(-clf.intercept_[0] / norm)
+    return Probe(direction, bias, layer, "lda", deception_type)
+
+
 def fit_lr(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str, C: float = 1.0) -> Probe:
     """Logistic-regression probe. Its weight vector becomes the direction.
 
@@ -86,4 +108,4 @@ def fit_lr(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str, C: flo
     return Probe(direction, bias, layer, "lr", deception_type)
 
 
-FITTERS = {"mms": fit_mms, "mms_std": fit_mms_std, "lr": fit_lr}
+FITTERS = {"mms": fit_mms, "mms_std": fit_mms_std, "lda": fit_lda, "lr": fit_lr}

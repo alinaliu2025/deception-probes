@@ -18,7 +18,7 @@ from dprobe.plotting import report_one_type
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--type", required=True, choices=DECEPTION_TYPES)
-    ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std"])
+    ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std", "lda"])
     ap.add_argument("--filter", action="store_true",
                     help="sandbagging only: drop questions the model can't answer honestly")
     ap.add_argument("--max-examples", type=int, default=None,
