@@ -40,6 +40,24 @@ def _pick_dtype(device: str):
     return torch.float32
 
 
+def default_batch_size(device: str) -> int:
+    """Pick a batch size from the actual card's VRAM.
+
+    Keyed on detected memory, not a cluster flag, so it can't desync from the
+    node you're really on. Tuned for extraction (one no_grad forward, all hidden
+    states materialised): 80GB A100/H100 -> 64, 32GB V100 -> 32, smaller -> 8.
+    Override with --batch-size if a long sequence length still OOMs.
+    """
+    if device != "cuda":
+        return 16
+    total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+    if total_gb > 60:
+        return 64
+    if total_gb > 24:
+        return 32
+    return 8
+
+
 def load_model(name: str = MODEL_NAME, device: str | None = None):
     """Returns (model, tokenizer, device). Call once, reuse for every dataset."""
     device = device or get_device()
@@ -70,11 +88,14 @@ def build_prompt(tokenizer, ex: Example) -> str:
 
 
 def extract(model, tokenizer, examples: list[Example], device: str,
-            verbose: bool = True, batch_size: int = 32):
+            verbose: bool = True, batch_size: int | None = None):
     """Run every example through the model in batches.
 
     Examples are sorted by prompt length before batching to minimise padding
     waste; results are reordered to match the original input order.
+
+    batch_size defaults to a VRAM-aware value (see default_batch_size); pass an
+    int to override.
 
     Left-padding means every sequence's last real token sits at position -1,
     so we extract h[:, -1, :] without tracking per-example lengths.
@@ -83,6 +104,10 @@ def extract(model, tokenizer, examples: list[Example], device: str,
         acts:   float array [n_examples, n_layers+1, hidden]
         labels: int array   [n_examples]   (1 = deceptive condition, 0 = control)
     """
+    if batch_size is None:
+        batch_size = default_batch_size(device)
+    if verbose:
+        print(f"  batch_size={batch_size}")
     prompts = [build_prompt(tokenizer, ex) for ex in examples]
     lengths = [len(tokenizer.encode(p)) for p in prompts]
     order = sorted(range(len(examples)), key=lambda i: lengths[i])

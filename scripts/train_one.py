@@ -28,10 +28,18 @@ def main():
                     help="permutation control: shuffle labels before training. A "
                          "leak-free pipeline collapses to AUROC ~0.5; anything well "
                          "above means the held-out split is leaking signal.")
+    ap.add_argument("--model", default=None,
+                    help="HuggingFace model id to probe; overrides config.MODEL_NAME "
+                         "for this run only (e.g. Qwen/Qwen2.5-7B-Instruct). Default "
+                         "keeps the committed baseline.")
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="extraction batch size; default auto-picks from GPU VRAM. "
+                         "Lower it if a long sequence length OOMs.")
     args = ap.parse_args()
 
-    model, tokenizer, device = load_model()
-    print(f"device: {device}")
+    model_name = args.model or MODEL_NAME
+    model, tokenizer, device = load_model(model_name)
+    print(f"model: {model_name} | device: {device}")
 
     examples = data.get(args.type)
     if args.max_examples is not None:
@@ -46,7 +54,7 @@ def main():
         print(f"capability filter: kept {len(examples)}/{before} examples")
 
     print(f"extracting activations for {len(examples)} examples ...")
-    acts, labels = extract(model, tokenizer, examples, device)
+    acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size)
 
     if args.permute:
         labels = np.random.default_rng(SEED).permutation(labels)
@@ -72,7 +80,7 @@ def main():
         "max_examples": args.max_examples,
         "filter": bool(args.type == "sandbagging" and args.filter),
         "permuted": args.permute,
-        "model": MODEL_NAME,
+        "model": model_name,
         "device": device,
         "model_dtype": str(model.dtype),
         "n_examples": int(len(labels)),

@@ -22,16 +22,24 @@ from dprobe.plotting import report_comparison
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std"])
+    ap.add_argument("--model", default=None,
+                    help="HuggingFace model id to probe; overrides config.MODEL_NAME "
+                         "for this run only (e.g. Qwen/Qwen2.5-7B-Instruct). Default "
+                         "keeps the committed baseline.")
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="extraction batch size; default auto-picks from GPU VRAM. "
+                         "Lower it if a long sequence length OOMs.")
     args = ap.parse_args()
 
-    model, tokenizer, device = load_model()
-    print(f"device: {device}")
+    model_name = args.model or MODEL_NAME
+    model, tokenizer, device = load_model(model_name)
+    print(f"model: {model_name} | device: {device}")
 
     acts, labels, probes, summary = {}, {}, {}, {}
     for t in DECEPTION_TYPES:
         examples = data.get(t)
         print(f"\n[{t}] extracting {len(examples)} examples ...")
-        A, y = extract(model, tokenizer, examples, device)
+        A, y = extract(model, tokenizer, examples, device, batch_size=args.batch_size)
         groups = [ex.user for ex in examples]
         aurocs, bl, probe = layer_sweep(A, y, args.method, t, groups)
         print(f"[{t}] best layer {bl} | AUROC {aurocs[bl]:.3f}")
@@ -59,7 +67,7 @@ def main():
         "kind": "compare",
         "method": args.method,
         "seed": SEED,
-        "model": MODEL_NAME,
+        "model": model_name,
         "device": device,
         "model_dtype": str(model.dtype),
         "types": types,
