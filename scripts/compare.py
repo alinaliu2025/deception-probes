@@ -21,7 +21,7 @@ from dprobe.plotting import report_comparison
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", default="lr", choices=["lr", "mms"])
+    ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std"])
     args = ap.parse_args()
 
     model, tokenizer, device = load_model()

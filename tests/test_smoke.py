@@ -10,7 +10,7 @@ import numpy as np
 from dprobe import data
 from dprobe.config import DECEPTION_TYPES
 from dprobe.evaluate import direction_cosines, layer_sweep, transfer_matrix
-from dprobe.probes import fit_lr, fit_mms
+from dprobe.probes import fit_lr, fit_mms, fit_mms_std
 
 
 def _separable(n=60, hidden=32, layers=4, seed=0):
@@ -34,7 +34,7 @@ def test_datasets_are_balanced_and_typed():
 def test_probes_recover_planted_direction():
     acts, y = _separable()
     X = acts[:, 1, :]
-    for fitter in (fit_mms, fit_lr):
+    for fitter in (fit_mms, fit_mms_std, fit_lr):
         p = fitter(X, y, layer=1, deception_type="test")
         auroc_like = (p.predict(X) == y).mean()
         assert auroc_like > 0.9

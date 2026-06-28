@@ -40,6 +40,31 @@ def fit_mms(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str) -> Pr
     return Probe(direction, bias, layer, "mms", deception_type)
 
 
+def fit_mms_std(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str) -> Probe:
+    """Standardized difference-of-means probe.
+
+    Same estimator as ``fit_mms`` but computed in z-scored space: residual-stream
+    dims have wildly different scales (a few massive-activation channels dominate
+    the raw norm), so a raw mean-difference is swamped by those rogue dims rather
+    than the deception signal. We take the mean-difference on standardized
+    features, then fold the scaler back out so the stored direction stays in raw
+    activation space and remains directly comparable across types for transfer --
+    exactly the fold used in ``fit_lr``. Raw ``fit_mms`` is kept as-is; this is a
+    separate method ("mms_std"), not a replacement.
+    """
+    scaler = StandardScaler().fit(X)
+    Xs = scaler.transform(X)
+    direction_z = Xs[y == 1].mean(0) - Xs[y == 0].mean(0)
+    # undo standardization: w_z·(x-mu)/sigma == (w_z/sigma)·x, so the raw-space
+    # functional is w_z/sigma (the additive mu term cancels in a mean-difference)
+    w = direction_z / scaler.scale_
+    norm = np.linalg.norm(w) + 1e-8
+    direction = w / norm
+    proj = X @ direction
+    bias = float((proj[y == 1].mean() + proj[y == 0].mean()) / 2)
+    return Probe(direction, bias, layer, "mms_std", deception_type)
+
+
 def fit_lr(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str, C: float = 1.0) -> Probe:
     """Logistic-regression probe. Its weight vector becomes the direction.
 
@@ -61,4 +86,4 @@ def fit_lr(X: np.ndarray, y: np.ndarray, layer: int, deception_type: str, C: flo
     return Probe(direction, bias, layer, "lr", deception_type)
 
 
-FITTERS = {"mms": fit_mms, "lr": fit_lr}
+FITTERS = {"mms": fit_mms, "mms_std": fit_mms_std, "lr": fit_lr}
