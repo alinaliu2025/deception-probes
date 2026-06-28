@@ -12,9 +12,9 @@ import argparse
 
 import numpy as np
 
-from dprobe import data
+from dprobe import data, runlog
 from dprobe.activations import extract, load_model
-from dprobe.config import DECEPTION_TYPES
+from dprobe.config import DECEPTION_TYPES, MODEL_NAME, SEED
 from dprobe.evaluate import direction_cosines, layer_sweep, transfer_matrix
 from dprobe.plotting import report_comparison
 
@@ -27,7 +27,7 @@ def main():
     model, tokenizer, device = load_model()
     print(f"device: {device}")
 
-    acts, labels, probes = {}, {}, {}
+    acts, labels, probes, summary = {}, {}, {}, {}
     for t in DECEPTION_TYPES:
         examples = data.get(t)
         print(f"\n[{t}] extracting {len(examples)} examples ...")
@@ -36,6 +36,8 @@ def main():
         aurocs, bl, probe = layer_sweep(A, y, args.method, t, groups)
         print(f"[{t}] best layer {bl} | AUROC {aurocs[bl]:.3f}")
         acts[t], labels[t], probes[t] = A, y, probe
+        summary[t] = {"n_examples": int(len(y)), "n_groups": int(len(set(groups))),
+                      "best_layer": int(bl), "auroc": float(aurocs[bl])}
 
     M, types = transfer_matrix(probes, acts, labels)
     cos, _ = direction_cosines(probes)
@@ -50,9 +52,22 @@ def main():
     for i, t in enumerate(types):
         print(f"{t[:6]:>6}  " + "  ".join(f"{cos[i, j]:>6.2f}" for j in range(len(types))))
 
-    out = report_comparison(M, cos, types, args.method)
-    print(f"\nsaved -> {out}")
-    np.save(f"results/transfer_matrix_{args.method}.npy", M)
+    run_dir = runlog.new_run_dir("compare", args.method)
+    report_comparison(M, cos, types, args.method, run_dir)
+    np.save(run_dir / f"transfer_matrix_{args.method}.npy", M)
+    runlog.write_meta(run_dir, {
+        "kind": "compare",
+        "method": args.method,
+        "seed": SEED,
+        "model": MODEL_NAME,
+        "device": device,
+        "model_dtype": str(model.dtype),
+        "types": types,
+        "per_type": summary,
+        "transfer_matrix": M.tolist(),
+        "direction_cosines": cos.tolist(),
+    })
+    print(f"\nsaved -> {run_dir}")
 
 
 if __name__ == "__main__":

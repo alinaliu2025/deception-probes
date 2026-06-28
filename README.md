@@ -161,8 +161,9 @@ With `(.venv)` showing:
 python -m scripts.train_one --type sycophancy
 ```
  
-That writes a picture to the `results/` folder showing how well the detector did. You can
-swap `sycophancy` for `sandbagging` or `omission`.
+Each run makes its own dated folder under `results/runs/` (see **"Where the results go"**
+below) with a picture showing how well the detector did. You can swap `sycophancy` for
+`sandbagging` or `omission`.
  
 For sandbagging, add `--filter`:
  
@@ -180,7 +181,47 @@ The main event, all three plus the comparison grid:
 python -m scripts.compare --method lr
 ```
  
-This writes the transfer-matrix picture to `results/`.
+This writes the transfer-matrix picture to its own folder under `results/runs/`.
+ 
+### Useful flags
+ 
+A couple of extra options:
+ 
+- `--method lr` or `--method mms` — *how* the detector is built. `lr` (logistic
+  regression) is the default and what you want for the comparison grid. `mms`
+  (difference-of-means) is a simpler, faster alternative that draws the line
+  straight between the average honest state and the average deceptive state. Works
+  on both `train_one` and `compare`:
+ 
+  ```bash
+  python -m scripts.train_one --type sycophancy --method mms
+  ```
+ 
+- `--max-examples N` — use at most N examples. It drops whole honest/deceptive pairs at
+  random, so the balance stays even. Handy when an example set has grown large and you
+  just want a quick run instead of waiting on all of it.
+- `--permute` — a sanity check, not a real run. It **shuffles the labels** so there is
+  genuinely nothing real to learn, then trains anyway. A healthy setup should score about
+  **0.5** (pure guessing). If it scores much higher, the detector is picking up on a leak
+  rather than on deception, and the normal scores can't be trusted. Worth running once
+  after any big change:
+ 
+  ```bash
+  python -m scripts.train_one --type sycophancy --permute
+  ```
+ 
+(For sandbagging there is also `--filter`, covered just above.)
+ 
+### Where the results go
+ 
+Each run makes its own dated folder under `results/runs/`, named with the time, deception
+type, code version, and machine — so two runs never overwrite each other, even on
+different computers. Inside you get the picture(s) plus a small **`meta.json`** that
+records exactly how the run was set up (model, settings) and what it scored.
+ 
+That `meta.json` is the one file we keep in version control: commit it and `git pull` to
+share results across machines. The heavy pictures and data files stay local and can always
+be redrawn from a saved run.
  
 ---
  
@@ -238,12 +279,13 @@ deception-probes/
 │   ├── activations.py        # peeks inside the model
 │   ├── probes.py             # builds the detector
 │   ├── evaluate.py           # scores it, builds the comparison grid
-│   └── plotting.py           # draws the result pictures
+│   ├── plotting.py           # draws the result pictures
+│   └── runlog.py             # saves each run to its own folder + meta.json
 ├── scripts/                  # the commands you run
 │   ├── train_one.py
 │   └── compare.py
 ├── tests/                    # quick self-checks
-└── results/                  # where the pictures land
+└── results/runs/             # one dated folder per run (pictures + meta.json)
 ```
  
 ---

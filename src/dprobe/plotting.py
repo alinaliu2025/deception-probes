@@ -18,10 +18,16 @@ from .probes import Probe
 C_HONEST, C_DECEP = "#2a7fb8", "#c4452f"
 
 
-def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str):
-    """The 2x2 diagnostic from the original script, generalised to one deception type."""
+def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str,
+                    groups=None, out_dir=None):
+    """The 2x2 diagnostic from the original script, generalised to one deception type.
+
+    Pass the same `groups` used by layer_sweep so panel D's ROC is computed on the
+    identical held-out split as the AUROC in the title (otherwise the curve and the
+    headline number come from different splits). `out_dir` defaults to RESULTS_DIR.
+    """
     n_layers = acts.shape[1]
-    tr, te = split(len(labels), labels)
+    tr, te = split(len(labels), labels, groups)
     Xbl = acts[:, best_layer, :]
     scores = probe.score(Xbl)
     test_auroc = aurocs[best_layer]
@@ -63,7 +69,7 @@ def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str)
     d.legend(fontsize=9, loc="lower right")
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out = RESULTS_DIR / f"report_{probe.deception_type}_{method}.png"
+    out = (out_dir or RESULTS_DIR) / f"report_{probe.deception_type}_{method}.png"
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return out
@@ -81,8 +87,11 @@ def _heatmap(ax, M, types, title, fmt="{:.2f}"):
     return im
 
 
-def report_comparison(transfer_M, cos_M, types, method: str):
-    """Two heatmaps side by side: cross-type transfer AUROC and direction cosine."""
+def report_comparison(transfer_M, cos_M, types, method: str, out_dir=None):
+    """Two heatmaps side by side: cross-type transfer AUROC and direction cosine.
+
+    `out_dir` defaults to RESULTS_DIR; pass a run directory to keep it immutable.
+    """
     fig, ax = plt.subplots(1, 2, figsize=(13, 5.5))
     im0 = _heatmap(ax[0], transfer_M, types,
                    f"Transfer AUROC ({method})\nrow = trained on, col = tested on")
@@ -105,7 +114,7 @@ def report_comparison(transfer_M, cos_M, types, method: str):
     fig.suptitle(f"Cross-type deception probe comparison | {method}",
                  fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    out = RESULTS_DIR / f"comparison_{method}.png"
+    out = (out_dir or RESULTS_DIR) / f"comparison_{method}.png"
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return out

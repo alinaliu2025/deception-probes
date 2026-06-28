@@ -17,6 +17,7 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
   - `probes.py` `Probe` object + `fit_mms` / `fit_lr`
   - `evaluate.py` layer sweep, AUROC, `transfer_matrix`, `direction_cosines`
   - `plotting.py` per-type report + comparison heatmaps
+  - `runlog.py` per-run output dirs (`new_run_dir`, `write_meta`)
   - `data/` one module per deception type, each exposes `build() -> list[Example]`
 - `scripts/train_one.py` train+report a single type
 - `scripts/compare.py` the cross-type study
@@ -27,6 +28,9 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
 - Install: `pip install -e ".[dev]"`
 - Fast tests: `pytest -q`
 - One type: `python -m scripts.train_one --type sycophancy`
+  - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
+  - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
+  - `--filter` sandbagging only (capability filter, see IMPORTANT)
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs
@@ -41,7 +45,9 @@ Architecture Decision Records live in `.claude/docs/adr/`. Use sequential number
 - New deception type = new module in `src/dprobe/data/` + one line in
   `data/__init__.py`. Don't special-case types elsewhere.
 - Probes are layer-specific; a `Probe` carries its own `.layer`.
-- Outputs go to `results/` (gitignored).
+- Each run writes its own dir `results/runs/<utc>_<kind>_<method>_<sha>_<host>/`
+  (via `runlog`). Only `meta.json` is git-tracked (cross-machine source of truth);
+  heavy `.npy`/`.png` artifacts are gitignored and regenerable.
 
 ## IMPORTANT
 

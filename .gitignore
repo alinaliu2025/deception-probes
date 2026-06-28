@@ -8,6 +8,14 @@ venv/
 # results: keep the folder, ignore the heavy outputs
 results/*
 !results/.gitkeep
+# ...but track each run's tiny meta.json (the numbers + provenance you compare
+# across machines). Heavy .npy/.png artifacts stay ignored and are regenerable.
+# Re-include the runs tree's directories at every depth (never leave a parent
+# excluded, or the file re-include below can't take effect), then the one file.
+!results/runs/
+results/runs/**
+!results/runs/**/
+!results/runs/**/meta.json
 
 # model/activation caches
 *.npy
