@@ -40,6 +40,9 @@ def main():
                          "fast on near-separable data; default keeps sklearn C=1.0.")
     args = ap.parse_args()
 
+    if args.C is not None and args.method != "lr":
+        print(f"warning: --C is lr-only and is ignored for --method {args.method}")
+
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")

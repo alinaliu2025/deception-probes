@@ -34,6 +34,9 @@ def main():
                          "fast on near-separable data; default keeps sklearn C=1.0.")
     args = ap.parse_args()
 
+    if args.C is not None and args.method != "lr":
+        print(f"warning: --C is lr-only and is ignored for --method {args.method}")
+
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
@@ -66,6 +69,9 @@ def main():
     run_dir = runlog.new_run_dir("compare", args.method)
     report_comparison(M, cos, types, args.method, run_dir)
     np.save(run_dir / f"transfer_matrix_{args.method}.npy", M)
+    for t, probe in probes.items():
+        np.savez(run_dir / f"probe_{t}.npz", direction=probe.direction, bias=probe.bias,
+                 layer=probe.layer, method=probe.method, deception_type=probe.deception_type)
     runlog.write_meta(run_dir, {
         "kind": "compare",
         "method": args.method,

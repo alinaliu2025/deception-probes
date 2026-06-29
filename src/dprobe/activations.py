@@ -112,7 +112,9 @@ def extract(model, tokenizer, examples: list[Example], device: str,
     lengths = [len(tokenizer.encode(p)) for p in prompts]
     order = sorted(range(len(examples)), key=lambda i: lengths[i])
 
-    acts_ordered, labels_ordered = [], []
+    # labels are known up front and stay in input order
+    labels = np.array([ex.label for ex in examples])
+    acts = None  # preallocated on the first batch, once n_layers+1 and hidden are known
     for start in range(0, len(order), batch_size):
         idx = order[start:start + batch_size]
         batch_prompts = [prompts[i] for i in idx]
@@ -123,18 +125,16 @@ def extract(model, tokenizer, examples: list[Example], device: str,
         # [n_layers+1, batch, hidden] -> [batch, n_layers+1, hidden]
         last = torch.stack([h[:, -1, :] for h in out.hidden_states], dim=0)
         last = last.permute(1, 0, 2).float().cpu().numpy()
+        if acts is None:
+            # [n_examples, n_layers+1, hidden]; fill in place so we never hold a
+            # list-of-arrays AND an np.stack copy at once (that was the 2x peak)
+            acts = np.empty((len(examples), last.shape[1], last.shape[2]), dtype=np.float32)
         for j, i in enumerate(idx):
-            acts_ordered.append((i, last[j]))
-            labels_ordered.append((i, examples[i].label))
+            acts[i] = last[j]  # write straight into the original-input slot
         if verbose:
             done = min(start + batch_size, len(examples))
             print(f"  {done}/{len(examples)}", end="\r", flush=True)
     if verbose:
         print()
 
-    acts_ordered.sort(key=lambda x: x[0])
-    labels_ordered.sort(key=lambda x: x[0])
-    return (
-        np.stack([a for _, a in acts_ordered]),
-        np.array([lab for _, lab in labels_ordered]),
-    )
+    return acts, labels
