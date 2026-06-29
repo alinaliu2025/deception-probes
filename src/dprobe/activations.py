@@ -88,7 +88,8 @@ def build_prompt(tokenizer, ex: Example) -> str:
 
 
 def extract(model, tokenizer, examples: list[Example], device: str,
-            verbose: bool = True, batch_size: int | None = None):
+            verbose: bool = True, batch_size: int | None = None,
+            acts_dtype: np.dtype = np.float32):
     """Run every example through the model in batches.
 
     Examples are sorted by prompt length before batching to minimise padding
@@ -97,11 +98,19 @@ def extract(model, tokenizer, examples: list[Example], device: str,
     batch_size defaults to a VRAM-aware value (see default_batch_size); pass an
     int to override.
 
+    `acts_dtype` is the dtype of the returned activation buffer, the run's
+    dominant host-RAM cost ([n_examples, n_layers+1, hidden]). float16 halves it
+    and is lossless when the model itself runs in fp16 (the hidden states are
+    already fp16; we only upcast them to compute -- see the .float() below). On a
+    bf16 model fp16 can clip outlier activations, so keep the float32 default
+    unless you know the node is fp16. The layer sweep upcasts each slice for
+    fitting, so probe math is unaffected by the storage dtype either way.
+
     Left-padding means every sequence's last real token sits at position -1,
     so we extract h[:, -1, :] without tracking per-example lengths.
 
     Returns:
-        acts:   float array [n_examples, n_layers+1, hidden]
+        acts:   float array [n_examples, n_layers+1, hidden] (dtype=acts_dtype)
         labels: int array   [n_examples]   (1 = deceptive condition, 0 = control)
     """
     if batch_size is None:
@@ -128,7 +137,7 @@ def extract(model, tokenizer, examples: list[Example], device: str,
         if acts is None:
             # [n_examples, n_layers+1, hidden]; fill in place so we never hold a
             # list-of-arrays AND an np.stack copy at once (that was the 2x peak)
-            acts = np.empty((len(examples), last.shape[1], last.shape[2]), dtype=np.float32)
+            acts = np.empty((len(examples), last.shape[1], last.shape[2]), dtype=acts_dtype)
         for j, i in enumerate(idx):
             acts[i] = last[j]  # write straight into the original-input slot
         if verbose:

@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--batch-size", type=int, default=None,
                     help="extraction batch size; default auto-picks from GPU VRAM. "
                          "Lower it if a long sequence length OOMs.")
+    ap.add_argument("--acts-dtype", default="float32", choices=["float32", "float16"],
+                    help="dtype of the host-side activation buffer (the run's main "
+                         "RAM cost). float16 halves it and is lossless on an fp16 "
+                         "model; use it to fit large example counts on a small node.")
     ap.add_argument("--C", type=float, default=None,
                     help="lr only: inverse L2 strength. Lower (e.g. 0.1) converges "
                          "fast on near-separable data; default keeps sklearn C=1.0.")
@@ -60,7 +64,8 @@ def main():
         print(f"capability filter: kept {len(examples)}/{before} examples")
 
     print(f"extracting activations for {len(examples)} examples ...")
-    acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size)
+    acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size,
+                           acts_dtype=np.dtype(args.acts_dtype))
 
     if args.permute:
         labels = np.random.default_rng(SEED).permutation(labels)
@@ -89,6 +94,7 @@ def main():
         "model": model_name,
         "device": device,
         "model_dtype": str(model.dtype),
+        "acts_dtype": args.acts_dtype,
         "n_examples": int(len(labels)),
         "n_groups": int(len(set(groups))),
         "best_layer": int(best_layer),
