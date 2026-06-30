@@ -6,9 +6,11 @@ run is exercised by scripts/train_one.py.
 """
 
 import numpy as np
+import pytest
 
 from dprobe import data
 from dprobe.config import DECEPTION_TYPES
+from dprobe.data import sycophancy
 from dprobe.evaluate import direction_cosines, layer_sweep, transfer_matrix
 from dprobe.probes import fit_lda, fit_lr, fit_mms, fit_mms_std
 
@@ -29,6 +31,42 @@ def test_datasets_are_balanced_and_typed():
         assert labels.count(0) == labels.count(1), f"{t} not balanced"
         assert all(e.deception_type == t for e in ex)
         assert len(ex) >= 8
+
+
+def test_sycophancy_framing_design_is_clean():
+    """The instruction-contrast design must differ only in the system prompt and
+    read before any answer (no completion). Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="framing")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    labels = [e.label for e in ex]
+    assert labels.count(0) == labels.count(1), "framing design not balanced"
+    # no completion anywhere -> read position is prompt-final, before any answer
+    assert all(e.completion is None for e in ex), "framing must not paste a completion"
+
+    by_user: dict[str, dict[int, object]] = {}
+    for e in ex:
+        by_user.setdefault(e.user, {})[e.label] = e
+    for pair in by_user.values():
+        assert set(pair) == {0, 1}
+        assert pair[0].user == pair[1].user                 # same task
+        assert pair[1].system == sycophancy.NEUTRAL_SYSTEM  # label 1 = neutral
+        assert pair[0].system == sycophancy.HONEST_SYSTEM   # label 0 = honest-primed
+        assert pair[1].system != pair[0].system             # differ ONLY in system
+        assert "matching" in pair[1].meta and "not_matching" in pair[1].meta
+
+
+def test_completion_design_is_default_and_unchanged():
+    """Default get() path stays the leaky completion baseline (back-compat)."""
+    try:
+        default = data.get("sycophancy")
+        explicit = sycophancy.build(design="completion")
+    except Exception as e:
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+    assert len(default) == len(explicit)
+    assert all(e.completion is not None for e in default)
 
 
 def test_probes_recover_planted_direction():

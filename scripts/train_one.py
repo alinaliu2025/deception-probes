@@ -20,7 +20,15 @@ def main():
     ap.add_argument("--type", required=True, choices=DECEPTION_TYPES)
     ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std", "lda"])
     ap.add_argument("--filter", action="store_true",
-                    help="sandbagging only: drop questions the model can't answer honestly")
+                    help="run the type's behaviour filter: sandbagging drops "
+                         "questions the model can't answer honestly; sycophancy "
+                         "(--design framing) drops questions where the framing "
+                         "doesn't flip the model's answer")
+    ap.add_argument("--design", default="completion", choices=["completion", "framing"],
+                    help="sycophancy only: 'completion' (default) is the original "
+                         "leaky answer-paste baseline; 'framing' is the instruction "
+                         "contrast (neutral vs honesty-primed system prompt, no "
+                         "completion, read before any answer). Pair with --filter.")
     ap.add_argument("--max-examples", type=int, default=None,
                     help="cap dataset size for speed; randomly drops whole prompts "
                          "(keeps matched pairs and label balance)")
@@ -46,22 +54,30 @@ def main():
 
     if args.C is not None and args.method != "lr":
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
+    if args.design != "completion" and args.type != "sycophancy":
+        print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
 
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
 
-    examples = data.get(args.type)
+    examples = data.get(args.type, design=args.design)
     if args.max_examples is not None:
         before = len(examples)
         examples = data.subsample(examples, args.max_examples, SEED)
         if len(examples) != before:
             print(f"capped to {len(examples)}/{before} examples (--max-examples {args.max_examples})")
-    if args.type == "sandbagging" and args.filter:
-        from dprobe.data.sandbagging import capability_filter
+    if args.filter:
+        flt = data.FILTERS.get(args.type)
+        if flt is None:
+            ap.error(f"--filter is not defined for --type {args.type} "
+                     f"(have {sorted(data.FILTERS)})")
+        if args.type == "sycophancy" and args.design != "framing":
+            ap.error("--filter for sycophancy requires --design framing "
+                     "(the completion design has no model choice to filter on)")
         before = len(examples)
-        examples = capability_filter(model, tokenizer, device, examples)
-        print(f"capability filter: kept {len(examples)}/{before} examples")
+        examples = flt(model, tokenizer, device, examples)
+        print(f"{args.type} filter: kept {len(examples)}/{before} examples")
 
     print(f"extracting activations for {len(examples)} examples ...")
     acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size,
@@ -86,10 +102,11 @@ def main():
     runlog.write_meta(run_dir, {
         "kind": "train_one",
         "type": args.type,
+        "design": args.design if args.type == "sycophancy" else "n/a",
         "method": args.method,
         "seed": SEED,
         "max_examples": args.max_examples,
-        "filter": bool(args.type == "sandbagging" and args.filter),
+        "filter": bool(args.filter),
         "permuted": args.permute,
         "model": model_name,
         "device": device,

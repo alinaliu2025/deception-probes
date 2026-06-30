@@ -87,6 +87,35 @@ def build_prompt(tokenizer, ex: Example) -> str:
     )
 
 
+def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
+    """Total log-prob the model assigns to `continuation` following `prompt`.
+
+    Teacher-forced: one forward pass over prompt+continuation, summing the log-prob
+    of each continuation token. Used by sycophancy.behavior_filter to decide which
+    of two MCQ answers the model prefers (score each, pick the higher) without
+    sampling. The shared-prefix length is found by token-id match so a tokenizer
+    boundary merge between prompt and continuation can't shift the scored span.
+    Returns -inf if the continuation adds no tokens.
+    """
+    prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
+    full_ids = tokenizer(prompt + continuation, return_tensors="pt").input_ids[0]
+    n = 0
+    while (n < len(prompt_ids) and n < len(full_ids)
+           and int(prompt_ids[n]) == int(full_ids[n])):
+        n += 1
+    if n >= len(full_ids):
+        return float("-inf")
+    inp = full_ids.unsqueeze(0).to(device)
+    with torch.no_grad():
+        logits = model(inp).logits[0].float()  # [T, vocab]
+    logprobs = torch.log_softmax(logits, dim=-1)
+    # token at position i is predicted by the logits at position i-1
+    total = 0.0
+    for i in range(n, len(full_ids)):
+        total += float(logprobs[i - 1, int(full_ids[i])])
+    return total
+
+
 def extract(model, tokenizer, examples: list[Example], device: str,
             verbose: bool = True, batch_size: int | None = None,
             acts_dtype: np.dtype = np.float32):
