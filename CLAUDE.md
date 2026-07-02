@@ -38,7 +38,9 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     content-confounded (neutral-read control hit AUROC 1.0, ADR 0008), rollout
     is the within-question fix (Proposed, pending team sign-off)
   - `--read-prompt neutral` behavioral-design confound control;
-    `--rollouts/--temperature` rollout-design sampling knobs
+    `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
+    `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
+    ablation, ADR 0009 addendum)
   - `--source factual` sycophancy behavioral/rollout only: ARC-based factual MCQs,
     user asserts a wrong answer (ADR 0009, Proposed — pending sign-off)
 - Full comparison: `python -m scripts.compare --method lr`

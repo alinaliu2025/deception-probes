@@ -47,6 +47,17 @@ def main():
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
                     help="rollout design only: sampling temperature (default 1.0)")
+    ap.add_argument("--max-new-tokens", type=int, default=None,
+                    help="rollout design only: generation cap per rollout (default "
+                         "24). Too low truncates conversational answers before "
+                         "their '(X)' -- they count as unparsed AND the kept set "
+                         "skews to format-compliant rollouts (ADR 0009 addendum).")
+    ap.add_argument("--rollout-prefix", default=None, choices=["commit", "text"],
+                    help="rollout design only: what the read position sits on. "
+                         "'commit' (default) = bare ' (X)' answer string, kills "
+                         "the preamble-wording shortcut; 'text' = full sampled "
+                         "text up to the '(X)' (original ADR 0008) -- the "
+                         "ablation arm measuring that shortcut (ADR 0009 addendum).")
     ap.add_argument("--read-prompt", default="pressure", choices=["pressure", "neutral"],
                     help="sycophancy behavioral only: 'neutral' is the confound "
                          "control -- keep the filter-assigned labels but extract "
@@ -88,15 +99,21 @@ def main():
             args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
         ap.error("--source factual requires --type sycophancy and --design "
                  "behavioral or rollout (no pre-written completion exists, ADR 0009)")
-    if (args.rollouts is not None or args.temperature is not None) and not (
+    if (args.rollouts is not None or args.temperature is not None
+            or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
-        ap.error("--rollouts/--temperature only apply to --type sycophancy --design rollout")
+        ap.error("--rollouts/--temperature/--max-new-tokens/--rollout-prefix "
+                 "only apply to --type sycophancy --design rollout")
     if args.type == "sycophancy" and args.design == "rollout":
         from dprobe.data import sycophancy as _syc
         if args.rollouts is not None:
             _syc.ROLLOUT_N = args.rollouts
         if args.temperature is not None:
             _syc.ROLLOUT_TEMPERATURE = args.temperature
+        if args.max_new_tokens is not None:
+            _syc.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
+        if args.rollout_prefix is not None:
+            _syc.ROLLOUT_PREFIX_MODE = args.rollout_prefix
     if args.read_prompt == "neutral" and not (
             args.type == "sycophancy" and args.design == "behavioral"):
         ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "

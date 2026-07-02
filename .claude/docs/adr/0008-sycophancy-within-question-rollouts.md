@@ -4,6 +4,10 @@
 are used or reported. Code is merged behind `--design rollout`; nothing
 existing changes behaviour.
 **Date:** 2026-07-02
+**Amended by:** ADR 0009 addendum (2026-07-02) — the read prefix now defaults to
+the bare `" (X)"` answer string (`--rollout-prefix commit`); the full-text read
+described below showed a preamble-wording shortcut (layer-1 AUROC 0.97) and is
+kept as the `--rollout-prefix text` ablation arm.
 
 ## Context
 

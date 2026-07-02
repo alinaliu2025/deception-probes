@@ -36,8 +36,11 @@ Three construction designs are available (see `build`):
   ambivalent questions (both choices appear), label each rollout by its own
   choice, balance cave/hold within every question. Content cannot separate the
   classes because each kept question contributes both equally. Read position is
-  the choice-commit token (the rollout text truncated at its first "(X)" rides
-  in meta['assistant_prefix']). `rollout_filter` is MANDATORY, same sentinel.
+  the choice-commit token: meta['assistant_prefix'] carries the bare " (X)"
+  answer string (ROLLOUT_PREFIX_MODE='commit', default -- see ADR 0009 addendum)
+  or the sampled text truncated at its first "(X)" ('text', the original ADR
+  0008 read, kept as the wording-shortcut ablation). `rollout_filter` is
+  MANDATORY, same sentinel.
 
 Split: fixed-seed 95/5 by prompt index to keep paired examples on one side.
 
@@ -86,10 +89,26 @@ _TEST_FRACTION = 0.05
 
 BEHAVIORAL_UNLABELED = -1  # sentinel: behavioral/rollout examples before the filter runs
 
-# rollout-design knobs (ADR 0008); train_one's --rollouts/--temperature set these
+# rollout-design knobs (ADR 0008); train_one's --rollouts/--temperature/
+# --max-new-tokens/--rollout-prefix set these
 ROLLOUT_N = 8
 ROLLOUT_TEMPERATURE = 1.0
-ROLLOUT_MAX_NEW_TOKENS = 8  # prompts end "Answer:"; "(A)" arrives immediately
+# 24, not 8: opinion prompts end "Answer:" so "(A)" arrives immediately, but the
+# factual assertion templates ("Can you confirm?") pull a conversational preamble
+# ("Yes, that's right, the answer is (B)") -- at 8 tokens 58% of 7B factual
+# rollouts were cut off before their letter (run 2026-07-02T19-38-41Z), losing
+# yield AND selecting for format-compliant rollouts. See ADR 0009 addendum.
+ROLLOUT_MAX_NEW_TOKENS = 24
+# what rides in meta['assistant_prefix'] (the read position, ADR 0008/0009):
+# 'commit' (default) = the bare answer string " (X)" -- within a question the two
+#   classes then differ ONLY in the letter token, which the letter balance
+#   de-correlates from the label globally. Kills the wording/length shortcut.
+# 'text' = the sampled text truncated just past its "(X)" (original ADR 0008).
+#   CONFOUNDED: cave and hold rollouts word their preamble differently ("Yes,
+#   you're right... (B)" vs "Actually... (A)"), and the probe reads that surface
+#   difference -- layer-1 AUROC 0.97 on the 2026-07-02 7B factual run. Kept as
+#   the ablation arm that measures the wording shortcut.
+ROLLOUT_PREFIX_MODE = "commit"
 
 # Question stems for the 'behavioral' design's persona-stripping. Every question
 # in the two source files starts with a persona bio ("Hello, my name is ...")
@@ -568,7 +587,12 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
                 n_unparsed += 1
                 continue
             label = 1 if choice == "matching" else 0
-            prefix = t[:end]
+            if ROLLOUT_PREFIX_MODE == "commit":
+                # bare answer string: within-question classes differ only in the
+                # letter token; dedupe then keeps at most one child per class
+                prefix = ex.meta["matching"] if label == 1 else ex.meta["not_matching"]
+            else:  # 'text': original ADR 0008 read, kept as the wording-shortcut ablation
+                prefix = t[:end]
             if (label, prefix) in seen:
                 continue
             seen.add((label, prefix))
@@ -602,6 +626,8 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
         "sampled_questions": len(gated),
         "n_rollouts": ROLLOUT_N,
         "temperature": ROLLOUT_TEMPERATURE,
+        "max_new_tokens": ROLLOUT_MAX_NEW_TOKENS,
+        "prefix_mode": ROLLOUT_PREFIX_MODE,
         "unparsed_rollouts": n_unparsed,
         "single_class_questions": n_deterministic,
         "ambivalent_questions": len(gated) - n_deterministic,
