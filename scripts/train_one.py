@@ -5,6 +5,7 @@
 """
 
 import argparse
+from dataclasses import replace
 
 import numpy as np
 
@@ -32,6 +33,13 @@ def main():
                          "contrast (leaks the instruction tokens, ADR 0007); "
                          "'behavioral' labels by the model's own choice under an "
                          "identical pressure prompt -- requires --filter.")
+    ap.add_argument("--read-prompt", default="pressure", choices=["pressure", "neutral"],
+                    help="sycophancy behavioral only: 'neutral' is the confound "
+                         "control -- keep the filter-assigned labels but extract "
+                         "activations on the persona-stripped NEUTRAL prompt, where "
+                         "no pressure exists so nothing deceptive can be happening. "
+                         "AUROC here measures pure question-content signal; the "
+                         "pressure run is only trustworthy above this baseline.")
     ap.add_argument("--max-examples", type=int, default=None,
                     help="cap dataset size for speed; randomly drops whole prompts "
                          "(keeps matched pairs and label balance)")
@@ -62,6 +70,10 @@ def main():
     if args.type == "sycophancy" and args.design == "behavioral" and not args.filter:
         ap.error("--design behavioral requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
+    if args.read_prompt == "neutral" and not (
+            args.type == "sycophancy" and args.design == "behavioral"):
+        ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "
+                 "(labels + the stripped prompt come from the behavioral filter)")
 
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
@@ -87,6 +99,14 @@ def main():
         filter_stats = getattr(flt, "last_stats", None)
         print(f"{args.type} filter: kept {len(examples)}/{before} examples")
 
+    # group key stays the PRESSURE prompt in both read modes, so the neutral
+    # control reuses the identical held-out split as its paired pressure run
+    groups = [ex.user for ex in examples]
+    if args.read_prompt == "neutral":
+        examples = [replace(ex, user=ex.meta["neutral_user"]) for ex in examples]
+        print("NEUTRAL-READ CONTROL: extracting on persona-stripped prompts -- "
+              "AUROC here is pure question-content confound (no pressure present)")
+
     print(f"extracting activations for {len(examples)} examples ...")
     acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size,
                            acts_dtype=np.dtype(args.acts_dtype))
@@ -95,14 +115,15 @@ def main():
         labels = np.random.default_rng(SEED).permutation(labels)
         print("PERMUTATION CONTROL: labels shuffled -- a leak-free pipeline gives AUROC ~0.5")
 
-    # hold out whole prompts: a pair's two halves share `user`, so this keeps
-    # them on the same side of the split (genuinely independent held-out set)
-    groups = [ex.user for ex in examples]
+    # hold out whole prompts: a pair's two halves share the group key, so this
+    # keeps them on the same side of the split (genuinely independent held-out set)
     aurocs, best_layer, probe = layer_sweep(acts, labels, args.method, args.type, groups, C=args.C)
     print(f"best layer {best_layer} | held-out AUROC {aurocs[best_layer]:.3f}")
 
     # immutable, self-describing run dir; meta.json is the part tracked in git
-    run_dir = runlog.new_run_dir("permctrl" if args.permute else args.type, args.method)
+    kind = ("permctrl" if args.permute
+            else "neutralctrl" if args.read_prompt == "neutral" else args.type)
+    run_dir = runlog.new_run_dir(kind, args.method)
     out = report_one_type(acts, labels, aurocs, best_layer, probe, args.method, groups, run_dir)
     np.savez(run_dir / "probe.npz", direction=probe.direction, bias=probe.bias,
              layer=probe.layer, method=probe.method, deception_type=probe.deception_type)
@@ -111,6 +132,7 @@ def main():
         "kind": "train_one",
         "type": args.type,
         "design": args.design if args.type == "sycophancy" else "n/a",
+        "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,
         "max_examples": args.max_examples,
