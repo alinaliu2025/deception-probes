@@ -109,6 +109,33 @@ def test_sycophancy_behavioral_build_is_unlabeled_and_promptfinal():
         assert "matching" in e.meta and "not_matching" in e.meta
 
 
+def test_parse_choice_maps_rollout_text_to_answer():
+    """Rollout design (ADR 0008): first '(X)' decides; truncation ends at it."""
+    matching, not_matching = " (A)", " (B)"
+    choice, end = sycophancy.parse_choice(" (B) I disagree", matching, not_matching)
+    assert choice == "not_matching" and " (B) I disagree"[:end] == " (B)"
+    choice, end = sycophancy.parse_choice("I'd say (A), since...", matching, not_matching)
+    assert choice == "matching" and "I'd say (A), since..."[:end].endswith("(A)")
+    assert sycophancy.parse_choice("no letter here", matching, not_matching) == (None, None)
+    assert sycophancy.parse_choice(" (C) what?", matching, not_matching) == (None, None)
+
+
+def test_sycophancy_rollout_build_matches_behavioral_plus_marker():
+    """Rollout build: identical construction to behavioral, plus the dispatch
+    marker meta['design']='rollout'. Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="rollout")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "rollout" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+
+
 def test_completion_design_is_default_and_unchanged():
     """Default get() path stays the leaky completion baseline (back-compat)."""
     try:

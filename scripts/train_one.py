@@ -27,12 +27,19 @@ def main():
                          "the model's answer; sycophancy behavioral ASSIGNS the "
                          "labels from the model's own choice (mandatory there)")
     ap.add_argument("--design", default="completion",
-                    choices=["completion", "framing", "behavioral"],
+                    choices=["completion", "framing", "behavioral", "rollout"],
                     help="sycophancy only: 'completion' (default) is the original "
                          "leaky answer-paste baseline; 'framing' is the instruction "
                          "contrast (leaks the instruction tokens, ADR 0007); "
                          "'behavioral' labels by the model's own choice under an "
-                         "identical pressure prompt -- requires --filter.")
+                         "identical pressure prompt -- requires --filter, and is "
+                         "content-confounded (ADR 0008); 'rollout' labels each "
+                         "SAMPLED answer to the same question (within-question "
+                         "contrast, ADR 0008, pending sign-off) -- requires --filter.")
+    ap.add_argument("--rollouts", type=int, default=None,
+                    help="rollout design only: samples per question (default 8)")
+    ap.add_argument("--temperature", type=float, default=None,
+                    help="rollout design only: sampling temperature (default 1.0)")
     ap.add_argument("--read-prompt", default="pressure", choices=["pressure", "neutral"],
                     help="sycophancy behavioral only: 'neutral' is the confound "
                          "control -- keep the filter-assigned labels but extract "
@@ -67,9 +74,18 @@ def main():
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
     if args.design != "completion" and args.type != "sycophancy":
         print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
-    if args.type == "sycophancy" and args.design == "behavioral" and not args.filter:
-        ap.error("--design behavioral requires --filter: labels are assigned by "
+    if args.type == "sycophancy" and args.design in ("behavioral", "rollout") and not args.filter:
+        ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
+    if (args.rollouts is not None or args.temperature is not None) and not (
+            args.type == "sycophancy" and args.design == "rollout"):
+        ap.error("--rollouts/--temperature only apply to --type sycophancy --design rollout")
+    if args.type == "sycophancy" and args.design == "rollout":
+        from dprobe.data import sycophancy as _syc
+        if args.rollouts is not None:
+            _syc.ROLLOUT_N = args.rollouts
+        if args.temperature is not None:
+            _syc.ROLLOUT_TEMPERATURE = args.temperature
     if args.read_prompt == "neutral" and not (
             args.type == "sycophancy" and args.design == "behavioral"):
         ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "
@@ -91,9 +107,9 @@ def main():
         if flt is None:
             ap.error(f"--filter is not defined for --type {args.type} "
                      f"(have {sorted(data.FILTERS)})")
-        if args.type == "sycophancy" and args.design not in ("framing", "behavioral"):
-            ap.error("--filter for sycophancy requires --design framing or "
-                     "behavioral (the completion design has no model choice)")
+        if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout"):
+            ap.error("--filter for sycophancy requires --design framing, "
+                     "behavioral or rollout (completion has no model choice)")
         before = len(examples)
         examples = flt(model, tokenizer, device, examples)
         filter_stats = getattr(flt, "last_stats", None)

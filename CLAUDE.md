@@ -33,8 +33,12 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
   - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
     sycophancy `--design framing` keep-if-flips; sycophancy `--design behavioral`
     assigns the labels (mandatory there)
-  - `--design {completion,framing,behavioral}` sycophancy constructions
-    (ADR 0006/0007); completion and framing leak, behavioral is the trusted one
+  - `--design {completion,framing,behavioral,rollout}` sycophancy constructions
+    (ADR 0006/0007/0008); completion and framing leak, behavioral is
+    content-confounded (neutral-read control hit AUROC 1.0, ADR 0008), rollout
+    is the within-question fix (Proposed, pending team sign-off)
+  - `--read-prompt neutral` behavioral-design confound control;
+    `--rollouts/--temperature` rollout-design sampling knobs
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs

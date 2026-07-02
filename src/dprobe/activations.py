@@ -82,9 +82,15 @@ def build_prompt(tokenizer, ex: Example) -> str:
         return tokenizer.apply_chat_template(
             messages, add_generation_prompt=False, tokenize=False
         )
-    return tokenizer.apply_chat_template(
+    prompt = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, tokenize=False
     )
+    # rollout design (ADR 0008): an in-progress assistant answer, truncated at
+    # the choice-commit token, is appended UNCLOSED (no end-of-turn) so the
+    # last token -- the extract() read position -- is the commit token itself.
+    if "assistant_prefix" in ex.meta:
+        prompt += ex.meta["assistant_prefix"]
+    return prompt
 
 
 def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
