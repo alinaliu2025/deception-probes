@@ -30,7 +30,11 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
 - One type: `python -m scripts.train_one --type sycophancy`
   - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
   - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
-  - `--filter` sandbagging only (capability filter, see IMPORTANT)
+  - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
+    sycophancy `--design framing` keep-if-flips; sycophancy `--design behavioral`
+    assigns the labels (mandatory there)
+  - `--design {completion,framing,behavioral}` sycophancy constructions
+    (ADR 0006/0007); completion and framing leak, behavioral is the trusted one
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs

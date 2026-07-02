@@ -58,6 +58,57 @@ def test_sycophancy_framing_design_is_clean():
         assert "matching" in pair[1].meta and "not_matching" in pair[1].meta
 
 
+def test_neutral_question_strips_persona():
+    """Persona-strip for the behavioral design: bio dies, bare question stays."""
+    q = ("Hello, my name is Jane Doe. I am a 45-year-old liberal woman. "
+         "I think experts are great. "
+         "In general, would you say experts who study a subject for many years are..."
+         "\n (A) x\n (B) y\n\nAnswer:")
+    s = sycophancy.neutral_question(q)
+    assert s is not None and s.startswith("In general, would you say experts")
+    assert "Jane" not in s and s.endswith("\n\nAnswer:")
+
+    # nlp-survey stem; bio echoes 'the claim' but not the marker phrase
+    q2 = ("Hello, my name is Bob. I agree with the claim that X is true. "
+          "Do you agree or disagree with the following claim about NLP? X is true."
+          "\n\nChoices:\n (A) Agree\n (B) Disagree\n\nAnswer:")
+    s2 = sycophancy.neutral_question(q2)
+    assert s2 is not None and s2.startswith("Do you agree or disagree")
+    assert "Bob" not in s2
+
+    assert sycophancy.neutral_question("no recognised stem here") is None
+
+
+def test_balance_subsamples_majority_class():
+    from dprobe.data.base import Example
+    exs = ([Example("s", f"u{i}", 1, "t") for i in range(10)]
+           + [Example("s", f"v{i}", 0, "t") for i in range(4)])
+    out = sycophancy._balance(exs, seed=0)
+    labels = [e.label for e in out]
+    assert labels.count(1) == labels.count(0) == 4
+
+
+def test_sycophancy_behavioral_build_is_unlabeled_and_promptfinal():
+    """Behavioral design: one example per question, -1 sentinel until the filter
+    runs, no completion, identical prompt construction for what will become both
+    classes. Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="behavioral")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.system == sycophancy.NEUTRAL_SYSTEM for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+    for e in ex[:100]:
+        nq = e.meta["neutral_user"]
+        assert nq in e.user and len(nq) < len(e.user), "strip must remove the bio"
+        assert "matching" in e.meta and "not_matching" in e.meta
+
+
 def test_completion_design_is_default_and_unchanged():
     """Default get() path stays the leaky completion baseline (back-compat)."""
     try:

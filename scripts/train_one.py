@@ -22,13 +22,16 @@ def main():
     ap.add_argument("--filter", action="store_true",
                     help="run the type's behaviour filter: sandbagging drops "
                          "questions the model can't answer honestly; sycophancy "
-                         "(--design framing) drops questions where the framing "
-                         "doesn't flip the model's answer")
-    ap.add_argument("--design", default="completion", choices=["completion", "framing"],
+                         "framing drops questions where the framing doesn't flip "
+                         "the model's answer; sycophancy behavioral ASSIGNS the "
+                         "labels from the model's own choice (mandatory there)")
+    ap.add_argument("--design", default="completion",
+                    choices=["completion", "framing", "behavioral"],
                     help="sycophancy only: 'completion' (default) is the original "
                          "leaky answer-paste baseline; 'framing' is the instruction "
-                         "contrast (neutral vs honesty-primed system prompt, no "
-                         "completion, read before any answer). Pair with --filter.")
+                         "contrast (leaks the instruction tokens, ADR 0007); "
+                         "'behavioral' labels by the model's own choice under an "
+                         "identical pressure prompt -- requires --filter.")
     ap.add_argument("--max-examples", type=int, default=None,
                     help="cap dataset size for speed; randomly drops whole prompts "
                          "(keeps matched pairs and label balance)")
@@ -56,6 +59,9 @@ def main():
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
     if args.design != "completion" and args.type != "sycophancy":
         print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
+    if args.type == "sycophancy" and args.design == "behavioral" and not args.filter:
+        ap.error("--design behavioral requires --filter: labels are assigned by "
+                 "running the model (build emits the -1 sentinel only)")
 
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
@@ -67,16 +73,18 @@ def main():
         examples = data.subsample(examples, args.max_examples, SEED)
         if len(examples) != before:
             print(f"capped to {len(examples)}/{before} examples (--max-examples {args.max_examples})")
+    filter_stats = None
     if args.filter:
         flt = data.FILTERS.get(args.type)
         if flt is None:
             ap.error(f"--filter is not defined for --type {args.type} "
                      f"(have {sorted(data.FILTERS)})")
-        if args.type == "sycophancy" and args.design != "framing":
-            ap.error("--filter for sycophancy requires --design framing "
-                     "(the completion design has no model choice to filter on)")
+        if args.type == "sycophancy" and args.design not in ("framing", "behavioral"):
+            ap.error("--filter for sycophancy requires --design framing or "
+                     "behavioral (the completion design has no model choice)")
         before = len(examples)
         examples = flt(model, tokenizer, device, examples)
+        filter_stats = getattr(flt, "last_stats", None)
         print(f"{args.type} filter: kept {len(examples)}/{before} examples")
 
     print(f"extracting activations for {len(examples)} examples ...")
@@ -113,6 +121,9 @@ def main():
         "model_dtype": str(model.dtype),
         "acts_dtype": args.acts_dtype,
         "n_examples": int(len(labels)),
+        "n_label1": int((labels == 1).sum()),
+        "n_label0": int((labels == 0).sum()),
+        "filter_stats": filter_stats,
         "n_groups": int(len(set(groups))),
         "best_layer": int(best_layer),
         "auroc": float(aurocs[best_layer]),

@@ -15,7 +15,9 @@ BUILDERS = {
 # prompt difference). Signature: (model, tokenizer, device, examples) -> examples.
 FILTERS = {
     "sandbagging": sandbagging.capability_filter,
-    "sycophancy": sycophancy.behavior_filter,  # design="framing" only
+    # dispatches on design: 'framing' -> behavior_filter (keep/drop),
+    # 'behavioral' -> behavioral_filter (assigns the labels; mandatory)
+    "sycophancy": sycophancy.sycophancy_filter,
 }
 
 
