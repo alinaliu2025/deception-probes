@@ -39,6 +39,8 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     is the within-question fix (Proposed, pending team sign-off)
   - `--read-prompt neutral` behavioral-design confound control;
     `--rollouts/--temperature` rollout-design sampling knobs
+  - `--source factual` sycophancy behavioral/rollout only: ARC-based factual MCQs,
+    user asserts a wrong answer (ADR 0009, Proposed — pending sign-off)
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs

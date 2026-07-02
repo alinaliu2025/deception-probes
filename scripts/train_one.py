@@ -36,6 +36,13 @@ def main():
                          "content-confounded (ADR 0008); 'rollout' labels each "
                          "SAMPLED answer to the same question (within-question "
                          "contrast, ADR 0008, pending sign-off) -- requires --filter.")
+    ap.add_argument("--source", default="opinion", choices=["opinion", "factual"],
+                    help="sycophancy behavioral/rollout only: question source. "
+                         "'opinion' (default) is the model-written-evals opinion "
+                         "data; 'factual' recasts ARC Easy+Challenge MCQs with the "
+                         "user asserting a WRONG answer, so the belief gate becomes "
+                         "a capability check and ambivalence yield goes up "
+                         "(ADR 0009, Proposed -- pending sign-off).")
     ap.add_argument("--rollouts", type=int, default=None,
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
@@ -77,6 +84,10 @@ def main():
     if args.type == "sycophancy" and args.design in ("behavioral", "rollout") and not args.filter:
         ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
+    if args.source != "opinion" and not (
+            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
+        ap.error("--source factual requires --type sycophancy and --design "
+                 "behavioral or rollout (no pre-written completion exists, ADR 0009)")
     if (args.rollouts is not None or args.temperature is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
         ap.error("--rollouts/--temperature only apply to --type sycophancy --design rollout")
@@ -95,7 +106,7 @@ def main():
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
 
-    examples = data.get(args.type, design=args.design)
+    examples = data.get(args.type, design=args.design, source=args.source)
     if args.max_examples is not None:
         before = len(examples)
         examples = data.subsample(examples, args.max_examples, SEED)
@@ -148,6 +159,7 @@ def main():
         "kind": "train_one",
         "type": args.type,
         "design": args.design if args.type == "sycophancy" else "n/a",
+        "source": args.source if args.type == "sycophancy" else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,

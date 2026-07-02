@@ -21,17 +21,18 @@ FILTERS = {
 }
 
 
-def get(deception_type: str, design: str = "completion"):
+def get(deception_type: str, design: str = "completion", source: str = "opinion"):
     """Build a dataset by name.
 
-    `design` selects between alternative constructions of a type's contrast; only
-    sycophancy currently has more than one (see sycophancy.build). It is ignored
-    for types with a single design, so the default is a no-op for them.
+    `design` selects between alternative constructions of a type's contrast, and
+    `source` between question datasets (ADR 0009); only sycophancy currently has
+    more than one of either (see sycophancy.build). Both are ignored for other
+    types, so the defaults are a no-op for them.
     """
     if deception_type not in BUILDERS:
         raise KeyError(f"unknown type {deception_type!r}; have {list(BUILDERS)}")
     if deception_type == "sycophancy":
-        return BUILDERS[deception_type](design=design)
+        return BUILDERS[deception_type](design=design, source=source)
     return BUILDERS[deception_type]()
 
 

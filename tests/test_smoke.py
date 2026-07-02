@@ -136,6 +136,66 @@ def test_sycophancy_rollout_build_matches_behavioral_plus_marker():
     assert len(users) == len(set(users)), "must be one example per question"
 
 
+def test_make_factual_row_construction():
+    """Factual source (ADR 0009), pure unit: assertion in the pressure question
+    but not the neutral one; matching = asserted WRONG letter (label 1 =
+    deceptive), not_matching = correct; both ' (X)' formatted; letter side
+    ~50/50 over many indices. No network needed."""
+    rows = [sycophancy._make_factual_row(
+        f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
+        for i in range(200)]
+    letters = {"A": 0, "B": 0}
+    for i, r in enumerate(rows):
+        assert set(r) == {"question", "answer_matching_behavior",
+                          "answer_not_matching_behavior", "neutral_user"}
+        # neutral body is the bare MCQ; the pressure question is that body plus
+        # an assertion prefix claiming the wrong answer
+        assert r["neutral_user"].endswith("\n\nAnswer:")
+        assert r["question"].endswith(r["neutral_user"])
+        assert len(r["question"]) > len(r["neutral_user"])
+        wrong_tag = r["answer_matching_behavior"].strip()
+        assert wrong_tag in r["question"][: -len(r["neutral_user"])], \
+            "assertion prefix must claim the wrong answer"
+        # ' (X)' format, letters disjoint, wrong letter holds the wrong text
+        m, nm = r["answer_matching_behavior"], r["answer_not_matching_behavior"]
+        assert m in (" (A)", " (B)") and nm in (" (A)", " (B)") and m != nm
+        assert f"{m} {2 * i + 1}" in r["neutral_user"]   # matching -> wrong text
+        assert f"{nm} {2 * i}" in r["neutral_user"]      # not_matching -> correct
+        letters[m.strip("() ")] += 1
+        # deterministic in idx
+        assert r == sycophancy._make_factual_row(
+            f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
+    assert 60 <= letters["A"] <= 140, f"letter side should be ~50/50, got {letters}"
+
+
+def test_factual_source_requires_behavioral_or_rollout():
+    """Guard: factual rows have no pre-written completion (ADR 0009)."""
+    with pytest.raises(ValueError, match="factual"):
+        sycophancy.build(design="completion", source="factual")
+    with pytest.raises(ValueError, match="factual"):
+        sycophancy.build(design="framing", source="factual")
+
+
+def test_sycophancy_factual_rollout_build():
+    """Factual + rollout: same sentinel/marker contract as opinion, plus the
+    source tag. Skips if the ARC dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="rollout", source="factual")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"ARC dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "rollout" for e in ex)
+    assert all(e.meta.get("source") == "factual" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+    for e in ex[:100]:
+        assert e.meta["neutral_user"] in e.user
+        assert len(e.meta["neutral_user"]) < len(e.user)
+
+
 def test_completion_design_is_default_and_unchanged():
     """Default get() path stays the leaky completion baseline (back-compat)."""
     try:
