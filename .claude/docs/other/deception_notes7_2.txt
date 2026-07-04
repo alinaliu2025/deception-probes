@@ -1,0 +1,103 @@
+Definitions:
+Deception: "the systematic inducement of false beliefs in the pursuit of some outcome other than the truth." according to: Park, Goldstein, O'Gara, Chen & Hendrycks's "AI Deception: A Survey of Examples, Risks, and Potential Solutions" (arXiv 2308.14752)
+Sycophancy (praise/agreement): telling users what they want to hear over what is true/honest 
+Sandbagging: strategic underperformance on an evaluation 
+strategic scheming: AI agents that covertly pursue misaligned goals, hiding their true capabilities and objectives 
+in-context scheming: the subset of scheming elicited by an in-context goal instruction
+agentic misalignment: agents that disobey in order to avoid replacement or to achieve their goal
+CoT Unfaithfulness:
+Alignment Faking: selectively complying with a training objective during training to avoid modification of out-of-training behavior 
+Goal/context-defined types — sycophancy, sandbagging, scheming, alignment faking, upward deception. Defined by who is deceived and why (the incentive/object).
+From Hallucination to Scheming: A Unified Taxonomy and Benchmark Analysis for LLM Deception https://arxiv.org/pdf/2604.04788 
+Mechanism-defined types — fabrication, omission, pragmatic distortion. Defined by the form the false signal takes.
+From Hallucination to Scheming: A Unified Taxonomy and Benchmark Analysis for LLM Deception https://arxiv.org/pdf/2604.04788 
+Single Turn Deception
+Sycophancy (praise/agreement): telling users what they want to hear over what is true/honest 
+strong evidence that sub-types of sycophancy occupy distinct linear directions 
+([2509.21305] Sycophancy Is Not One Thing: Causal Separation of Sycophantic Behaviors in LLMs, arXiv 2509.21305, Vennemeyer et al.)
+(1) the three behaviors are encoded along distinct linear directions in latent space
+(2) each behavior can be independently amplified or suppressed
+without affecting the others
+(3) their representational structure is consistent across model families and scales
+These results suggest that sycophantic behaviors correspond to distinct, independently steerable representations.
+Per-type separability is demonstrated within sycophancy but not across deception as a whole 
+Agreement:
+([2310.13548] Towards Understanding Sycophancy in Language Models, arXiv 2310.13548, Sharma et al.)
+Sandbagging: strategic underperformance on an evaluation 
+models can be fine-tuned, on a synthetic dataset, to hide specific capabilities unless given a password;
+frontier LMs, like GPT-4 and Claude 3 Opus, to selectively underperform on dangerous capability evaluations, while maintaining performance on general (harmless) capability evaluations 
+AI SANDBAGGING: LANGUAGE MODELS CAN STRATEGICALLY UNDERPERFORM ON EVALUATIONS https://arxiv.org/pdf/2406.07358
+sandbagging detection method: noise injection
+Introduce increasing levels of noise in model weights; non-sandbagging models show decreasing performance on tasks, while sandbagging models show increased performance likely due to disruption of underperformance mechanisms while core capabilities remain partially intact 
+Noise Injection Reveals Hidden Capabilities of Sandbagging Language Models  https://arxiv.org/pdf/2412.01784 
+sandbagging detection method: probes
+Detecting Strategic Deception Using Linear Probes https://arxiv.org/abs/2502.03407 
+AUDITING GAMES FOR SANDBAGGING https://arxiv.org/pdf/2512.07810 
+Although Prompt-based elicitation was not reliable, training-based elicitation consistently elicited full performance from the sandbagging models, using only a single correct demonstration of the evaluation task 
+strategic scheming/in-context scheming: AI agents that covertly pursue misaligned goals, hiding their true capabilities and objectives 
+Frontier Models are Capable of In-context Scheming (arXiv 2412.04984, Meinke et al.)
+o1, Claude 3.5 Sonnet, Claude 3 Opus, Gemini 1.5 Pro, and Llama 3.1 405B all demonstrate in-context scheming capabilities 
+(Anthropic, https://www.anthropic.com/research/agentic-misalignment)
+models from all developers resorted to malicious insider behaviors when that was the only way to avoid replacement or achieve their goals
+Models often disobeyed direct commands
+misbehaved less when it stated it was in testing and misbehaved more when it stated the situation was real
+Reward Hacking:
+emotion-vector steering causally moves reward hacking (Anthropic, arXiv 2604.07729) 
+Alignment Faking: selectively complying with a training objective during training to avoid modification of out-of-training behavior 
+ALIGNMENT FAKING IN LARGE LANGUAGE MODELS https://arxiv.org/pdf/2412.14093 
+CoT Unfaithfulness:
+(Turpin et al.; Anthropic's "Reasoning Models Don't Always Say What They Think.") https://arxiv.org/pdf/2305.04388 
+CoT explanations can systematically misrepresent the true reason for a model’s prediction 
+CoT explanations can be heavily influenced by adding biasing features to model inputs 
+Models frequently generate CoT explanations rationalizing answers that may not make logical sense 
+Omission: withholding or failing to disclose information 
+concealing insider trading (Scheurer et al. 2023, used as an eval in arXiv 2502.03407) 
+one SAE feature that reliably fired during lying was "secrecy in interactions" (The Secret Agenda: LLMs Strategically Lie and Our Current Safety Tools Are Blind https://arxiv.org/pdf/2509.20393 , DeLeeuw et al.) 
+Hallucination/Fabrication: generating false specifics
+Misdirection: technically-true-but-misleading framing 
+under-covered 
+From Hallucination to Scheming: A Unified Taxonomy and Benchmark Analysis for LLM Deception https://arxiv.org/pdf/2604.04788 
+Bluffing / imitation/learned deception: game-derived deception? 
+AI Deception: A Survey of Examples, Risks, and Potential Solutions https://arxiv.org/pdf/2308.14752 
+Meta developed the AI system CICERO to play the alliance-building and world-conquest game Diplomacy, but CICERO turned out to be an expert liar despite Meta’s intentions to train Cicero to be “largely honest and helpful to its speaking partners” 
+Evasion?
+Agentic/Muti-turn Deception
+Sandbagging:
+Relevant example: Claude fable purposely degrades performance when sensitive topics like cybersecurity and biology are mentioned; motivation to sandbag may be slightly different than traditional motivations
+Alignment Faking:
+Data/Email Manipulation:
+Self-Exfiltration
+Goal-Guarding
+
+
+Concealment
+Fabrication
+Upward Deception:
+"upward" deception of overseers 
+Other notes
+different deception domains occupy increasingly disjoint subspaces at scale ([2605.27958] Pressure-Testing Deception Probes in LLMs: Scaling, Robustness, and the Geometry of Deceptive Representations, arXiv 2605.27958, Kumar)
+
+
+Datasets:
+Sycophancy
+nrimsky/CAA (github.com/nrimsky/CAA): ready-formatted contrastive pairs (1000 generation pairs + 50 test) already structured for difference-in-means extraction. This is what most steering work builds on.
+Anthropic/model-written-evals (HF, sycophancy/ folder): the original GPT-4-generated sycophancy eval set that CAA's pairs derive from. Free, larger, but you'll format it yourself.
+Sandbagging
+Pre-made password-locked models: skip fine-tuning entirely. These models will sandbag when a password is included in the prompt. FelixHofstaetter/mistral-7b-sandbagging-new and redwoodresearch/math_pwd_lock_deepseek_math7b on HF. The "standard" condition includes the password; the sandbagging condition omits it — that locked-vs-elicited pair is your contrastive signal.
+TeunvdWeij/sandbagging (github.com/TeunvdWeij/sandbagging) — the original paper's ("AI Sandbagging: Language Models can Strategically Underperform on Evaluations" (van der Weij, Hofstätter, Jaffe, Brown & Ward, arXiv 2406.07358)) repo, with synthetic dataset generation and password-locked training scripts on WMDP. 
+cais/wmdp (HF): the underlying hazardous-knowledge MCQ benchmark the sandbagging is measured on.
+Gemma caveat: the password-locked models are Mistral/Llama. To get sandbagging on Gemma 2 2B, your cheapest route is prompt-based sandbagging (system prompt instructing underperformance) rather than fine-tuning your own locked Gemma. Note that prompt-based elicitation is reportedly less reliable than training-based, so verify the behavior actually appears before trusting the direction.
+Concealment / omission
+ApolloResearch/deception-detection (github.com/ApolloResearch/deception-detection): it bundles the insider-trading concealment scenario (Scheurer et al.), roleplay data, sandbagging data, and the REPE honest/dishonest instruction pairs. In the insider-trading scenario the model trades on a tip against policy, is then asked whether it used insider information, and gets an opportunity to lie: that's concealment with a clean ground-truth label.
+REPE honesty pairs (Zou et al. 2023) — 612 contrastive prompt pairs where only the "honest AI" vs "dishonest AI" instruction differs while the response is held identical. Bundled in the Apollo repo. This is your general deception direction baseline
+DolusChat (HF: AlignmentResearch/DolusChat) — broad, with controllable deception variables.
+Liars' Bench (2511.16035) — use for held-out evaluation, not training. It spans multiple deception types including instructed deception, convincing-game, and insider trading, and is the right place to stress-test whether your directions generalize.
+Benchmarks:
+MASK: Model Alignment between Statements and Knowledge, a benchmark for measuring lies of commission in LLMs 
+evaluation pipeline that directly measures when models lie by eliciting their underlying beliefs and testing whether models will contradict those beliefs when pressured to lie 
+
+
+
+Other notes:
+What libraries are used in mech interp/ will be applicable in our case?
+What deception types to start with + why?

@@ -25,4 +25,7 @@ results/runs/**
 # private local notes for Claude Code, not for the team
 CLAUDE.local.md
 .env
-.claude/
+# .claude/ is private EXCEPT docs/ (ADRs etc.) which the team versions.
+# `.claude/*` not `.claude/`: an excluded DIRECTORY can't have children re-included.
+.claude/*
+!.claude/docs/

@@ -82,9 +82,44 @@ def build_prompt(tokenizer, ex: Example) -> str:
         return tokenizer.apply_chat_template(
             messages, add_generation_prompt=False, tokenize=False
         )
-    return tokenizer.apply_chat_template(
+    prompt = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, tokenize=False
     )
+    # rollout design (ADR 0008): an in-progress assistant answer, truncated at
+    # the choice-commit token, is appended UNCLOSED (no end-of-turn) so the
+    # last token -- the extract() read position -- is the commit token itself.
+    if "assistant_prefix" in ex.meta:
+        prompt += ex.meta["assistant_prefix"]
+    return prompt
+
+
+def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
+    """Total log-prob the model assigns to `continuation` following `prompt`.
+
+    Teacher-forced: one forward pass over prompt+continuation, summing the log-prob
+    of each continuation token. Used by sycophancy.behavior_filter to decide which
+    of two MCQ answers the model prefers (score each, pick the higher) without
+    sampling. The shared-prefix length is found by token-id match so a tokenizer
+    boundary merge between prompt and continuation can't shift the scored span.
+    Returns -inf if the continuation adds no tokens.
+    """
+    prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
+    full_ids = tokenizer(prompt + continuation, return_tensors="pt").input_ids[0]
+    n = 0
+    while (n < len(prompt_ids) and n < len(full_ids)
+           and int(prompt_ids[n]) == int(full_ids[n])):
+        n += 1
+    if n >= len(full_ids):
+        return float("-inf")
+    inp = full_ids.unsqueeze(0).to(device)
+    with torch.no_grad():
+        logits = model(inp).logits[0].float()  # [T, vocab]
+    logprobs = torch.log_softmax(logits, dim=-1)
+    # token at position i is predicted by the logits at position i-1
+    total = 0.0
+    for i in range(n, len(full_ids)):
+        total += float(logprobs[i - 1, int(full_ids[i])])
+    return total
 
 
 def extract(model, tokenizer, examples: list[Example], device: str,

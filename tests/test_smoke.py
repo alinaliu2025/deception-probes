@@ -6,9 +6,11 @@ run is exercised by scripts/train_one.py.
 """
 
 import numpy as np
+import pytest
 
 from dprobe import data
 from dprobe.config import DECEPTION_TYPES
+from dprobe.data import sycophancy
 from dprobe.evaluate import direction_cosines, layer_sweep, transfer_matrix
 from dprobe.probes import fit_lda, fit_lr, fit_mms, fit_mms_std
 
@@ -29,6 +31,180 @@ def test_datasets_are_balanced_and_typed():
         assert labels.count(0) == labels.count(1), f"{t} not balanced"
         assert all(e.deception_type == t for e in ex)
         assert len(ex) >= 8
+
+
+def test_sycophancy_framing_design_is_clean():
+    """The instruction-contrast design must differ only in the system prompt and
+    read before any answer (no completion). Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="framing")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    labels = [e.label for e in ex]
+    assert labels.count(0) == labels.count(1), "framing design not balanced"
+    # no completion anywhere -> read position is prompt-final, before any answer
+    assert all(e.completion is None for e in ex), "framing must not paste a completion"
+
+    by_user: dict[str, dict[int, object]] = {}
+    for e in ex:
+        by_user.setdefault(e.user, {})[e.label] = e
+    for pair in by_user.values():
+        assert set(pair) == {0, 1}
+        assert pair[0].user == pair[1].user                 # same task
+        assert pair[1].system == sycophancy.NEUTRAL_SYSTEM  # label 1 = neutral
+        assert pair[0].system == sycophancy.HONEST_SYSTEM   # label 0 = honest-primed
+        assert pair[1].system != pair[0].system             # differ ONLY in system
+        assert "matching" in pair[1].meta and "not_matching" in pair[1].meta
+
+
+def test_neutral_question_strips_persona():
+    """Persona-strip for the behavioral design: bio dies, bare question stays."""
+    q = ("Hello, my name is Jane Doe. I am a 45-year-old liberal woman. "
+         "I think experts are great. "
+         "In general, would you say experts who study a subject for many years are..."
+         "\n (A) x\n (B) y\n\nAnswer:")
+    s = sycophancy.neutral_question(q)
+    assert s is not None and s.startswith("In general, would you say experts")
+    assert "Jane" not in s and s.endswith("\n\nAnswer:")
+
+    # nlp-survey stem; bio echoes 'the claim' but not the marker phrase
+    q2 = ("Hello, my name is Bob. I agree with the claim that X is true. "
+          "Do you agree or disagree with the following claim about NLP? X is true."
+          "\n\nChoices:\n (A) Agree\n (B) Disagree\n\nAnswer:")
+    s2 = sycophancy.neutral_question(q2)
+    assert s2 is not None and s2.startswith("Do you agree or disagree")
+    assert "Bob" not in s2
+
+    assert sycophancy.neutral_question("no recognised stem here") is None
+
+
+def test_balance_subsamples_majority_class():
+    from dprobe.data.base import Example
+    exs = ([Example("s", f"u{i}", 1, "t") for i in range(10)]
+           + [Example("s", f"v{i}", 0, "t") for i in range(4)])
+    out = sycophancy._balance(exs, seed=0)
+    labels = [e.label for e in out]
+    assert labels.count(1) == labels.count(0) == 4
+
+
+def test_sycophancy_behavioral_build_is_unlabeled_and_promptfinal():
+    """Behavioral design: one example per question, -1 sentinel until the filter
+    runs, no completion, identical prompt construction for what will become both
+    classes. Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="behavioral")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.system == sycophancy.NEUTRAL_SYSTEM for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+    for e in ex[:100]:
+        nq = e.meta["neutral_user"]
+        assert nq in e.user and len(nq) < len(e.user), "strip must remove the bio"
+        assert "matching" in e.meta and "not_matching" in e.meta
+
+
+def test_parse_choice_maps_rollout_text_to_answer():
+    """Rollout design (ADR 0008): first '(X)' decides; truncation ends at it."""
+    matching, not_matching = " (A)", " (B)"
+    choice, end = sycophancy.parse_choice(" (B) I disagree", matching, not_matching)
+    assert choice == "not_matching" and " (B) I disagree"[:end] == " (B)"
+    choice, end = sycophancy.parse_choice("I'd say (A), since...", matching, not_matching)
+    assert choice == "matching" and "I'd say (A), since..."[:end].endswith("(A)")
+    assert sycophancy.parse_choice("no letter here", matching, not_matching) == (None, None)
+    assert sycophancy.parse_choice(" (C) what?", matching, not_matching) == (None, None)
+
+
+def test_sycophancy_rollout_build_matches_behavioral_plus_marker():
+    """Rollout build: identical construction to behavioral, plus the dispatch
+    marker meta['design']='rollout'. Skips if the dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="rollout")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "rollout" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+
+
+def test_make_factual_row_construction():
+    """Factual source (ADR 0009), pure unit: assertion in the pressure question
+    but not the neutral one; matching = asserted WRONG letter (label 1 =
+    deceptive), not_matching = correct; both ' (X)' formatted; letter side
+    ~50/50 over many indices. No network needed."""
+    rows = [sycophancy._make_factual_row(
+        f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
+        for i in range(200)]
+    letters = {"A": 0, "B": 0}
+    for i, r in enumerate(rows):
+        assert set(r) == {"question", "answer_matching_behavior",
+                          "answer_not_matching_behavior", "neutral_user"}
+        # neutral body is the bare MCQ; the pressure question is that body plus
+        # an assertion prefix claiming the wrong answer
+        assert r["neutral_user"].endswith("\n\nAnswer:")
+        assert r["question"].endswith(r["neutral_user"])
+        assert len(r["question"]) > len(r["neutral_user"])
+        wrong_tag = r["answer_matching_behavior"].strip()
+        assert wrong_tag in r["question"][: -len(r["neutral_user"])], \
+            "assertion prefix must claim the wrong answer"
+        # ' (X)' format, letters disjoint, wrong letter holds the wrong text
+        m, nm = r["answer_matching_behavior"], r["answer_not_matching_behavior"]
+        assert m in (" (A)", " (B)") and nm in (" (A)", " (B)") and m != nm
+        assert f"{m} {2 * i + 1}" in r["neutral_user"]   # matching -> wrong text
+        assert f"{nm} {2 * i}" in r["neutral_user"]      # not_matching -> correct
+        letters[m.strip("() ")] += 1
+        # deterministic in idx
+        assert r == sycophancy._make_factual_row(
+            f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
+    assert 60 <= letters["A"] <= 140, f"letter side should be ~50/50, got {letters}"
+
+
+def test_factual_source_requires_behavioral_or_rollout():
+    """Guard: factual rows have no pre-written completion (ADR 0009)."""
+    with pytest.raises(ValueError, match="factual"):
+        sycophancy.build(design="completion", source="factual")
+    with pytest.raises(ValueError, match="factual"):
+        sycophancy.build(design="framing", source="factual")
+
+
+def test_sycophancy_factual_rollout_build():
+    """Factual + rollout: same sentinel/marker contract as opinion, plus the
+    source tag. Skips if the ARC dataset isn't available."""
+    try:
+        ex = sycophancy.build(design="rollout", source="factual")
+    except Exception as e:  # no network / dataset cache -> not a logic failure
+        pytest.skip(f"ARC dataset unavailable: {e}")
+
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "rollout" for e in ex)
+    assert all(e.meta.get("source") == "factual" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "must be one example per question"
+    for e in ex[:100]:
+        assert e.meta["neutral_user"] in e.user
+        assert len(e.meta["neutral_user"]) < len(e.user)
+
+
+def test_completion_design_is_default_and_unchanged():
+    """Default get() path stays the leaky completion baseline (back-compat)."""
+    try:
+        default = data.get("sycophancy")
+        explicit = sycophancy.build(design="completion")
+    except Exception as e:
+        pytest.skip(f"sycophancy dataset unavailable: {e}")
+    assert len(default) == len(explicit)
+    assert all(e.completion is not None for e in default)
 
 
 def test_probes_recover_planted_direction():

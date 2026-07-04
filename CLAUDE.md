@@ -30,7 +30,19 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
 - One type: `python -m scripts.train_one --type sycophancy`
   - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
   - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
-  - `--filter` sandbagging only (capability filter, see IMPORTANT)
+  - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
+    sycophancy `--design framing` keep-if-flips; sycophancy `--design behavioral`
+    assigns the labels (mandatory there)
+  - `--design {completion,framing,behavioral,rollout}` sycophancy constructions
+    (ADR 0006/0007/0008); completion and framing leak, behavioral is
+    content-confounded (neutral-read control hit AUROC 1.0, ADR 0008), rollout
+    is the within-question fix (Proposed, pending team sign-off)
+  - `--read-prompt neutral` behavioral-design confound control;
+    `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
+    `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
+    ablation, ADR 0009 addendum)
+  - `--source factual` sycophancy behavioral/rollout only: ARC-based factual MCQs,
+    user asserts a wrong answer (ADR 0009, Proposed — pending sign-off)
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs
