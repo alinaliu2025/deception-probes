@@ -212,6 +212,25 @@ A couple of extra options:
  
 (For sandbagging there is also `--filter`, covered just above.)
  
+### Full command reference & past results
+
+The flags above are the everyday ones. The sycophancy study also has research-only
+constructions (`--design completion|framing|behavioral|rollout`), a confound control
+(`--read-prompt neutral`), a factual data source (`--source factual`), and rollout
+sampling knobs (`--rollouts`, `--temperature`, `--max-new-tokens`, `--rollout-prefix`).
+
+Every runnable command, every flag, and a table of **all recorded runs to date with their
+AUROC** live in one place:
+
+- **[.claude/docs/run-catalog.md](.claude/docs/run-catalog.md)** — command/flag reference +
+  the full past-results table.
+- **[.claude/docs/adr/](.claude/docs/adr/)** — the *why* behind each design (ADRs 0006–0009).
+
+Short version of the results: the simple constructions (`completion`, `framing`) and the
+`behavioral` design all leak or are content-confounded (they hit AUROC ≈ 1.0 even under
+controls), which is why the `rollout` / `--source factual` designs exist. None of the
+sycophancy numbers should be treated as findings yet — see the caveats in the catalog.
+
 ### Where the results go
  
 Each run makes its own dated folder under `results/runs/`, named with the time, deception
