@@ -174,6 +174,40 @@ def test_factual_source_requires_behavioral_or_rollout():
         sycophancy.build(design="completion", source="factual")
     with pytest.raises(ValueError, match="factual"):
         sycophancy.build(design="framing", source="factual")
+    # the offline smoke source is a factual source and obeys the same guard
+    with pytest.raises(ValueError, match="factual"):
+        sycophancy.build(design="completion", source="factual-small")
+
+
+def test_factual_small_source_is_offline_and_well_formed():
+    """The repo-resident smoke source (fixtures/factual_smoke.jsonl) builds
+    rollout examples with NO network -- same schema/markers as ARC 'factual',
+    plus source='factual-small'. This is the dataset for local demos/smoke."""
+    ex = sycophancy.build(design="rollout", source="factual-small")
+    assert len(ex) >= 8, "smoke fixture should have enough rows to run"
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "rollout" for e in ex)
+    assert all(e.meta.get("source") == "factual-small" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "one example per question"
+    for e in ex:
+        # pressure prompt = neutral body + an assertion of the WRONG answer
+        assert e.meta["neutral_user"] in e.user
+        assert len(e.meta["neutral_user"]) < len(e.user)
+        m, nm = e.meta["matching"], e.meta["not_matching"]
+        assert m in (" (A)", " (B)") and nm in (" (A)", " (B)") and m != nm
+
+
+def test_factual_small_train_test_split_is_disjoint():
+    """The smoke source honours the fixed-seed 95/5 split like the other sources,
+    so a demo run's train and test questions never overlap."""
+    train = sycophancy.build(design="rollout", source="factual-small", split="train")
+    test = sycophancy.build(design="rollout", source="factual-small", split="test")
+    train_q = {e.meta["neutral_user"] for e in train}
+    test_q = {e.meta["neutral_user"] for e in test}
+    assert train_q.isdisjoint(test_q)
+    assert train_q, "train split should be non-empty"
 
 
 def test_sycophancy_factual_rollout_build():
@@ -194,6 +228,36 @@ def test_sycophancy_factual_rollout_build():
     for e in ex[:100]:
         assert e.meta["neutral_user"] in e.user
         assert len(e.meta["neutral_user"]) < len(e.user)
+
+
+def test_render_rollout_log_shows_set_membership():
+    """The per-run log (written to run_log.txt) records every gate failure and,
+    per gated question, its parsed rollout outcomes and final set membership:
+    USED / AMBIVALENT-BUT-TRIMMED / SINGLE-CLASS. Pure function, no model."""
+    from dprobe.data.base import Example
+
+    stats = {"questions_in": 3, "ambivalent_questions": 2, "n_examples": 2}
+    gate_failed = [Example("s", "PRESSURE-Q3", -1, "sycophancy",
+                           meta={"neutral_user": "Is the sky green?"})]
+    q_records = [
+        {"question": "Is 17 prime?", "user": "PRESSURE-Q1", "cave_letter": "A",
+         "parsed": ["caved", "held", "held"], "kept_pairs": 1, "outcome": "ambivalent"},
+        {"question": "Is 2 even?", "user": "PRESSURE-Q2", "cave_letter": "B",
+         "parsed": ["held", "held", "held"], "kept_pairs": 0, "outcome": "single-class"},
+    ]
+    kept_users = {"PRESSURE-Q1"}  # Q1 survived letter balance, Q2 did not (single-class)
+    log = sycophancy._render_rollout_log(stats, gate_failed, q_records, kept_users)
+
+    assert "gate-fail" in log and "Is the sky green?" in log
+    assert "USED" in log and "Is 17 prime?" in log
+    assert "SINGLE-CLASS" in log and "Is 2 even?" in log
+    assert "questions_in: 3" in log  # summary block present
+
+
+def test_gate_mode_defaults_to_logprob():
+    """Belief-gate default stays the deterministic log-prob gate: the sampled gate
+    is strictly opt-in (nothing existing changes behaviour)."""
+    assert sycophancy.GATE_MODE == "logprob"
 
 
 def test_completion_design_is_default_and_unchanged():

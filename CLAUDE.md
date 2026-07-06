@@ -41,8 +41,20 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
     ablation, ADR 0009 addendum)
-  - `--source factual` sycophancy behavioral/rollout only: ARC-based factual MCQs,
-    user asserts a wrong answer (ADR 0009, Proposed — pending sign-off)
+  - `--source {factual,factual-small}` sycophancy behavioral/rollout only:
+    `factual` = ARC MCQs, user asserts a wrong answer (ADR 0009, Proposed);
+    `factual-small` = tiny repo-resident OFFLINE fixture
+    (`src/dprobe/data/fixtures/factual_smoke.jsonl`) for smoke tests/demos, no
+    network, NOT trustworthy AUROC
+  - `--gate {logprob,sampled}` sycophancy behavioral/rollout belief gate:
+    `logprob` (default) = one deterministic teacher-forced comparison (ADR 0007);
+    `sampled` = generate `--gate-n` (20) answers unpressured, keep if correct on
+    ≥ `--gate-threshold` (0.9) at `--gate-temperature` (0.7) — the "model is SURE"
+    gate; opt-in, costs a generate call per question
+  - rollout runs write `results/runs/<run>/run_log.txt`: per-question gate result,
+    parsed rollout outcomes, and set membership (USED / AMBIVALENT-BUT-TRIMMED /
+    SINGLE-CLASS). See `.claude/docs/rollouts-explained.md` for a plain-language
+    walkthrough of the rollout design.
 - Full comparison: `python -m scripts.compare --method lr`
 
 ## ADRs

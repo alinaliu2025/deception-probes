@@ -36,13 +36,17 @@ def main():
                          "content-confounded (ADR 0008); 'rollout' labels each "
                          "SAMPLED answer to the same question (within-question "
                          "contrast, ADR 0008, pending sign-off) -- requires --filter.")
-    ap.add_argument("--source", default="opinion", choices=["opinion", "factual"],
+    ap.add_argument("--source", default="opinion",
+                    choices=["opinion", "factual", "factual-small"],
                     help="sycophancy behavioral/rollout only: question source. "
                          "'opinion' (default) is the model-written-evals opinion "
                          "data; 'factual' recasts ARC Easy+Challenge MCQs with the "
                          "user asserting a WRONG answer, so the belief gate becomes "
                          "a capability check and ambivalence yield goes up "
-                         "(ADR 0009, Proposed -- pending sign-off).")
+                         "(ADR 0009, Proposed -- pending sign-off); 'factual-small' "
+                         "is a tiny repo-resident OFFLINE stand-in for 'factual' "
+                         "(fixtures/factual_smoke.jsonl) for smoke tests and demos "
+                         "-- runs with no network, NOT for trustworthy AUROC.")
     ap.add_argument("--rollouts", type=int, default=None,
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
@@ -52,6 +56,21 @@ def main():
                          "24). Too low truncates conversational answers before "
                          "their '(X)' -- they count as unparsed AND the kept set "
                          "skews to format-compliant rollouts (ADR 0009 addendum).")
+    ap.add_argument("--gate", default="logprob", choices=["logprob", "sampled"],
+                    help="sycophancy behavioral/rollout belief gate. 'logprob' "
+                         "(default) keeps the deterministic teacher-forced "
+                         "comparison (ADR 0007); 'sampled' generates --gate-n "
+                         "answers on the unpressured prompt and keeps the question "
+                         "only if it answers correctly on >= --gate-threshold of "
+                         "them (the v2-plan 'model is SURE' gate; costs a generate "
+                         "call per question).")
+    ap.add_argument("--gate-n", type=int, default=None,
+                    help="--gate sampled only: samples per question (default 20)")
+    ap.add_argument("--gate-threshold", type=float, default=None,
+                    help="--gate sampled only: min correct fraction to keep a "
+                         "question (default 0.9)")
+    ap.add_argument("--gate-temperature", type=float, default=None,
+                    help="--gate sampled only: sampling temperature (default 0.7)")
     ap.add_argument("--rollout-prefix", default=None, choices=["commit", "text"],
                     help="rollout design only: what the read position sits on. "
                          "'commit' (default) = bare ' (X)' answer string, kills "
@@ -97,13 +116,32 @@ def main():
                  "running the model (build emits the -1 sentinel only)")
     if args.source != "opinion" and not (
             args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
-        ap.error("--source factual requires --type sycophancy and --design "
+        ap.error(f"--source {args.source} requires --type sycophancy and --design "
                  "behavioral or rollout (no pre-written completion exists, ADR 0009)")
     if (args.rollouts is not None or args.temperature is not None
             or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
         ap.error("--rollouts/--temperature/--max-new-tokens/--rollout-prefix "
                  "only apply to --type sycophancy --design rollout")
+    gate_overridden = (args.gate != "logprob" or args.gate_n is not None
+                       or args.gate_threshold is not None
+                       or args.gate_temperature is not None)
+    if gate_overridden and not (
+            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
+        ap.error("--gate/--gate-n/--gate-threshold/--gate-temperature only apply "
+                 "to --type sycophancy --design behavioral or rollout")
+    if (args.gate_n is not None or args.gate_threshold is not None
+            or args.gate_temperature is not None) and args.gate != "sampled":
+        ap.error("--gate-n/--gate-threshold/--gate-temperature require --gate sampled")
+    if args.type == "sycophancy" and args.design in ("behavioral", "rollout"):
+        from dprobe.data import sycophancy as _syc
+        _syc.GATE_MODE = args.gate
+        if args.gate_n is not None:
+            _syc.GATE_N = args.gate_n
+        if args.gate_threshold is not None:
+            _syc.GATE_THRESHOLD = args.gate_threshold
+        if args.gate_temperature is not None:
+            _syc.GATE_TEMPERATURE = args.gate_temperature
     if args.type == "sycophancy" and args.design == "rollout":
         from dprobe.data import sycophancy as _syc
         if args.rollouts is not None:
@@ -130,6 +168,7 @@ def main():
         if len(examples) != before:
             print(f"capped to {len(examples)}/{before} examples (--max-examples {args.max_examples})")
     filter_stats = None
+    filter_log = None
     if args.filter:
         flt = data.FILTERS.get(args.type)
         if flt is None:
@@ -141,6 +180,7 @@ def main():
         before = len(examples)
         examples = flt(model, tokenizer, device, examples)
         filter_stats = getattr(flt, "last_stats", None)
+        filter_log = getattr(flt, "last_log", None)
         print(f"{args.type} filter: kept {len(examples)}/{before} examples")
 
     # group key stays the PRESSURE prompt in both read modes, so the neutral
@@ -172,11 +212,16 @@ def main():
     np.savez(run_dir / "probe.npz", direction=probe.direction, bias=probe.bias,
              layer=probe.layer, method=probe.method, deception_type=probe.deception_type)
     np.save(run_dir / "aurocs.npy", aurocs)
+    if filter_log:
+        (run_dir / "run_log.txt").write_text(filter_log, encoding="utf-8")
+        print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
     runlog.write_meta(run_dir, {
         "kind": "train_one",
         "type": args.type,
         "design": args.design if args.type == "sycophancy" else "n/a",
         "source": args.source if args.type == "sycophancy" else "n/a",
+        "gate": args.gate if (args.type == "sycophancy"
+                              and args.design in ("behavioral", "rollout")) else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,
