@@ -254,6 +254,39 @@ def test_render_rollout_log_shows_set_membership():
     assert "questions_in: 3" in log  # summary block present
 
 
+def test_verify_read_positions_asserts_answer_token():
+    """Index-verification guard: passes when the read position (last token) holds
+    the rollout answer letter, raises when the prefix/read is off. Uses a fake
+    tokenizer so no model download is needed."""
+    from dprobe.activations import verify_read_positions
+    from dprobe.data.base import Example
+
+    class FakeTok:
+        """Minimal stand-in: 'tokenises' by whitespace, 'decodes' back to text.
+        build_prompt only needs apply_chat_template + a tokenizer call."""
+        def apply_chat_template(self, messages, add_generation_prompt, tokenize=False):
+            return " ".join(m["content"] for m in messages) + " ASSISTANT:"
+
+        def __call__(self, text, return_tensors=None):
+            words = text.split()
+            class _R:  # mimic .input_ids[0] as a list of "ids" (here, the words)
+                input_ids = [words]
+            return _R()
+
+        def decode(self, ids):
+            return " ".join(ids) if isinstance(ids, list) else str(ids)
+
+    ok = Example("sys", "Q body", 1, "sycophancy",
+                 meta={"assistant_prefix": " (A)"})
+    verify_read_positions(FakeTok(), [ok], verbose=False)  # letter (A) ends the prompt
+
+    bad = Example("sys", "Q body", 1, "sycophancy",
+                  meta={"assistant_prefix": " (A) and then a long tail of words that "
+                        "pushes the letter out of the final tokens entirely here now"})
+    with pytest.raises(AssertionError, match="read-position guard FAILED"):
+        verify_read_positions(FakeTok(), [bad], verbose=False)
+
+
 def test_gate_mode_defaults_to_logprob():
     """Belief-gate default stays the deterministic log-prob gate: the sampled gate
     is strictly opt-in (nothing existing changes behaviour)."""

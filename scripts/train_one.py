@@ -10,7 +10,7 @@ from dataclasses import replace
 import numpy as np
 
 from dprobe import data, runlog
-from dprobe.activations import extract, load_model
+from dprobe.activations import extract, load_model, verify_read_positions
 from dprobe.config import DECEPTION_TYPES, MODEL_NAME, SEED
 from dprobe.evaluate import layer_sweep
 from dprobe.plotting import report_one_type
@@ -190,6 +190,10 @@ def main():
         examples = [replace(ex, user=ex.meta["neutral_user"]) for ex in examples]
         print("NEUTRAL-READ CONTROL: extracting on persona-stripped prompts -- "
               "AUROC here is pure question-content confound (no pressure present)")
+
+    # guard: eyeball + assert the hidden state is read at the answer-commit token
+    # (the most common silent bug) before paying for the extraction pass
+    verify_read_positions(tokenizer, examples)
 
     print(f"extracting activations for {len(examples)} examples ...")
     acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size,

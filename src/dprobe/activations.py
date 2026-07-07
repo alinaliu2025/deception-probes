@@ -7,6 +7,8 @@ the original train_deception_probe.py so the behaviour is identical.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -91,6 +93,53 @@ def build_prompt(tokenizer, ex: Example) -> str:
     if "assistant_prefix" in ex.meta:
         prompt += ex.meta["assistant_prefix"]
     return prompt
+
+
+def verify_read_positions(tokenizer, examples: list[Example], n: int = 3,
+                          verbose: bool = True) -> None:
+    """Index-verification guard (v2-plan guard 2): show, and where possible assert,
+    the token that ``extract`` reads the hidden state from.
+
+    ``extract`` reads ``h[:, -1, :]`` -- the LAST token of the prompt. For a
+    rollout example that token is meant to be the answer-commit token (the
+    ``(A)``/``(B)``). This is the most common silent bug: an off-by-one read lands
+    on a space / paren / end-of-turn instead, quietly poisoning the direction.
+
+    For the first ``n`` examples this decodes the final tokens (so you can eyeball
+    the read position) and, when the example carries a rollout ``assistant_prefix``
+    with a letter, ASSERTS that letter is among those final tokens -- raising
+    before the expensive extraction pass rather than after a wasted run.
+    """
+    if not examples:
+        return
+    if verbose:
+        print(f"read-position check (extract reads the LAST token; first "
+              f"{min(n, len(examples))} examples):")
+    for ex in examples[:n]:
+        prompt = build_prompt(tokenizer, ex)
+        ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
+        tail = ids[-6:]
+        toks = [tokenizer.decode(t) for t in tail]
+        if verbose:
+            print(f"  label={ex.label} | last 6 tokens: "
+                  f"{' '.join(repr(t) for t in toks)}")
+            print(f"    >>> READ POSITION (last token) = "
+                  f"{tokenizer.decode(ids[-1:])!r}")
+        prefix = ex.meta.get("assistant_prefix")
+        if prefix is not None:
+            m = re.search(r"\(([A-Z])\)", prefix)
+            if m:
+                letter = m.group(1)
+                tail_text = tokenizer.decode(ids[-4:])
+                assert letter in tail_text, (
+                    "read-position guard FAILED: expected the answer letter "
+                    f"({letter}) among the final tokens, but the last tokens "
+                    f"decode to {tail_text!r}. The hidden state would be read "
+                    "off the wrong token -- fix the prefix/extraction before "
+                    "trusting this run."
+                )
+    if verbose:
+        print("  read-position check passed")
 
 
 def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
