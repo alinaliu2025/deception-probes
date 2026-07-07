@@ -327,3 +327,55 @@ def test_layer_sweep_and_transfer_run():
     assert M.shape == (2, 2)
     cos, _ = direction_cosines(probes)
     assert np.allclose(np.diag(cos), 1.0, atol=1e-5)
+
+
+def test_load_probe_roundtrips(tmp_path):
+    """A probe.npz written like train_one's is rebuilt into an equal Probe."""
+    from dprobe.steer import load_probe
+
+    d = np.zeros(8, dtype=np.float32)
+    d[3] = 1.0
+    path = tmp_path / "probe.npz"
+    np.savez(path, direction=d, bias=0.5, layer=13, method="mms",
+             deception_type="sycophancy")
+    p = load_probe(path)
+    assert p.layer == 13 and p.method == "mms" and p.deception_type == "sycophancy"
+    assert p.bias == 0.5 and np.allclose(p.direction, d)
+
+
+def test_steer_hooks_add_and_ablate():
+    """The forward-hook factories add alpha*v and project v out of a block output.
+
+    Exercises the residual-stream math with no model: a decoder block returns a
+    tuple whose first element is the hidden state, which is what the hooks edit.
+    """
+    torch = pytest.importorskip("torch")
+    from dprobe.steer import make_add_hook, make_ablate_hook
+
+    v = torch.zeros(4)
+    v[1] = 1.0  # unit vector along dim 1
+    h = torch.tensor([[[2.0, 5.0, 1.0, 0.0]]])  # [batch=1, seq=1, hidden=4]
+
+    add_out = make_add_hook(v, 3.0)(None, None, (h.clone(),))
+    assert torch.allclose(add_out[0][0, 0], torch.tensor([2.0, 8.0, 1.0, 0.0]))
+
+    ablate_out = make_ablate_hook(v)(None, None, (h.clone(),))
+    # the component along v (the 5.0 at dim 1) is removed, the rest untouched
+    assert torch.allclose(ablate_out[0][0, 0], torch.tensor([2.0, 0.0, 1.0, 0.0]))
+
+
+def test_build_items_selects_pressured_vs_neutral_prompt():
+    """build_items uses the assertion prompt when pressured and the persona-stripped
+    neutral question otherwise -- the two steering passes read different prompts."""
+    from dprobe.data.base import Example
+    from dprobe.steer import build_items
+
+    ex = Example("sys", "PRESSURE: I think (B).\n\nQ\n (A) x\n (B) y\n\nAnswer:",
+                 label=-1, deception_type="sycophancy",
+                 meta={"matching": " (B)", "not_matching": " (A)",
+                       "neutral_user": "Q\n (A) x\n (B) y\n\nAnswer:"})
+    pressured = build_items([ex], pressured=True)[0]
+    neutral = build_items([ex], pressured=False)[0]
+    assert pressured.example.user.startswith("PRESSURE")
+    assert neutral.example.user == ex.meta["neutral_user"]
+    assert pressured.matching == neutral.matching == " (B)"

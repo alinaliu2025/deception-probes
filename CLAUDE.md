@@ -56,6 +56,15 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     SINGLE-CLASS). See `.claude/docs/rollouts-explained.md` for a plain-language
     walkthrough of the rollout design.
 - Full comparison: `python -m scripts.compare --method lr`
+- Steering (causal check, ADR 0010): `python -m scripts.steer --probe
+  results/runs/<run>/probe.npz --model Qwen/Qwen2.5-7B-Instruct --source factual`
+  - Validates that a probe DIRECTION causes caving, not just correlates. `add` pass
+    adds `alpha·v` on unpressured items (wrong-rate should climb with alpha);
+    `ablate` pass projects `v` out on pressured items (caving should drop).
+  - `--probe` needs the run's `probe.npz` (gitignored; scp it back from OSC).
+    `--source factual-small` runs offline for a plumbing check (not trustworthy).
+  - `--alphas` are multiples of the layer's residual norm (`--raw` = absolute);
+    `--mode {add,ablate,both}`, `--samples N` (1=greedy), `--split {train,test}`.
 
 ## ADRs
 
