@@ -59,10 +59,19 @@ Design choices:
 1. `src/dprobe/steer.py` — `load_probe`, forward-hook factories (`make_add_hook`,
    `make_ablate_hook`), `add_sweep`, `ablate_pass`.
 2. `scripts/steer.py` — CLI: `--probe`, `--model`, `--source {factual,factual-small}`,
-   `--split`, `--mode {add,ablate,both}`, `--alphas`, `--raw`, `--samples`. Writes a
-   `kind="steer"` run dir with the curves in `meta.json` + `add_curve.npy`.
+   `--split`, `--mode {add,ablate,both}`, `--alphas`, `--raw`, `--samples`,
+   `--control {none,random}`. Writes a `kind="steer"` run dir with the curves in
+   `meta.json` + `add_curve.npy`.
 3. `data.get(..., split=...)` — forward the split through the registry (steering
    defaults to the `test` split so it intervenes on fresh items).
+4. **Matched random-direction control** (`--control random`, `steer.random_probe`)
+   and a **per-alpha parse rate**. The first 7B run (`2026-07-07T02-49-00Z`,
+   layer 15) made both non-optional: the add wrong-rate rose 0.002→0.378→0.479 but
+   *plateaued at chance* and then went unparseable at alpha≥2, and ablation moved
+   caving only 0.938→0.836. "Rises to a coin flip, then breaks generation" is
+   consistent with generic perturbation, so the random control (does a random
+   vector do the same?) and the parse rate (is wrong_rate computed over survivors?)
+   are what decide whether the direction is causal.
 
 ## Consequences
 
@@ -77,9 +86,9 @@ Design choices:
 
 ## Open questions
 
-- Whether a monotone add-curve on a *content-confounded* direction could still
-  arise from steering the model toward the asserted-letter token generally; a
-  matched control that steers a random unit vector of equal norm is the natural
-  baseline (not yet built).
+- The matched random-vector control now exists (`--control random`); the remaining
+  question is the *criterion*: how far must the probe curve clear the random curve
+  (and hold its parse rate) to count as causal? The first run's add-curve topping
+  out at chance rather than →1.0 is the specific pattern to explain.
 - Best-layer choice for steering vs. detection: the highest-AUROC layer is not
   necessarily the most causally potent one. Sweep is future work.

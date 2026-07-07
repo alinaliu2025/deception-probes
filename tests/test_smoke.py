@@ -364,6 +364,31 @@ def test_steer_hooks_add_and_ablate():
     assert torch.allclose(ablate_out[0][0, 0], torch.tensor([2.0, 0.0, 1.0, 0.0]))
 
 
+def test_random_probe_is_unit_and_same_layer():
+    """The random control shares the probe's layer but is an independent unit vector."""
+    from dprobe.probes import Probe
+    from dprobe.steer import random_probe
+
+    p = Probe(direction=np.eye(8)[0].astype(np.float32), bias=0.0, layer=15,
+              method="mms", deception_type="sycophancy")
+    r = random_probe(p, seed=0)
+    assert r.layer == 15 and r.deception_type == "sycophancy"
+    assert abs(np.linalg.norm(r.direction) - 1.0) < 1e-5
+    assert abs(float(r.direction @ p.direction)) < 0.9  # not aligned with the probe
+
+
+def test_parse_rate_tracks_generation_breakage():
+    """parse_rate falls as completions stop yielding a choice -- the signal that a
+    high-alpha wrong_rate is breakage, not steering."""
+    from dprobe.steer import _parse_rate, _wrong_rate
+
+    ok = [{"wrong": 2, "correct": 3, "unparsed": 0}]
+    assert _parse_rate(ok) == 1.0
+    broken = [{"wrong": 1, "correct": 0, "unparsed": 4}]
+    assert _parse_rate(broken) == pytest.approx(0.2)
+    assert _wrong_rate(broken) == 1.0  # over survivors only -> misleading without parse_rate
+
+
 def test_build_items_selects_pressured_vs_neutral_prompt():
     """build_items uses the assertion prompt when pressured and the persona-stripped
     neutral question otherwise -- the two steering passes read different prompts."""

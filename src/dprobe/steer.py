@@ -166,6 +166,50 @@ def _wrong_rate(counts: list[dict]) -> float:
     return wrong / parseable if parseable else float("nan")
 
 
+def _parse_rate(counts: list[dict]) -> float:
+    """Fraction of ALL completions that produced a recognisable choice. A parse rate
+    that falls as alpha climbs means the intervention is breaking generation, not
+    steering it -- so a wrong_rate computed over the survivors is not trustworthy."""
+    parseable = sum(c["wrong"] + c["correct"] for c in counts)
+    total = sum(c["wrong"] + c["correct"] + c["unparsed"] for c in counts)
+    return parseable / total if total else float("nan")
+
+
+def random_probe(probe: Probe, seed: int = 0) -> Probe:
+    """A matched random-direction control: a random unit vector at the SAME layer.
+
+    Steering it is the baseline the add/ablate passes need -- if a random vector of
+    equal norm moves behaviour as much as the probe direction does, the effect is
+    generic perturbation (adding noise degrades the model), not the direction."""
+    rng = np.random.default_rng(seed)
+    d = rng.normal(size=probe.direction.shape).astype(np.float32)
+    d /= np.linalg.norm(d) + 1e-8
+    return Probe(d, 0.0, probe.layer, probe.method + "_randctrl", probe.deception_type)
+
+
+def _add_curve(model, tokenizer, vec: torch.Tensor, correct: list[SteerItem],
+               layer: int, scale: float, alphas: list[float], device: str,
+               batch_size: int, max_new_tokens: int, samples: int,
+               temperature: float, verbose: bool, tag: str) -> dict:
+    """Sweep alpha for one direction over a fixed baseline-correct item set,
+    reporting both the wrong-answer rate and the parse rate at each alpha."""
+    wrong, parse = [], []
+    for a in alphas:
+        handle = _install(model, layer, make_add_hook(vec, a * scale))
+        try:
+            counts = _classify(model, tokenizer, correct, device, batch_size,
+                               max_new_tokens, samples, temperature)
+        finally:
+            handle.remove()
+        wr, pr = _wrong_rate(counts), _parse_rate(counts)
+        wrong.append(wr)
+        parse.append(pr)
+        if verbose:
+            print(f"    [{tag}] alpha={a:>6.3f}  wrong_rate={wr:.3f}  "
+                  f"parse_rate={pr:.3f}")
+    return {"wrong_rate": wrong, "parse_rate": parse}
+
+
 def _resid_scale(model, tokenizer, items: list[SteerItem], layer: int,
                  device: str, batch_size: int) -> float:
     """Mean L2 norm of the last-token residual at ``hidden_states[layer]`` over the
@@ -185,10 +229,14 @@ def _resid_scale(model, tokenizer, items: list[SteerItem], layer: int,
 def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: str,
               alphas: list[float], *, raw: bool = False, samples: int = 1,
               temperature: float = 0.7, max_new_tokens: int = 24,
-              batch_size: int | None = None, verbose: bool = True) -> dict:
+              batch_size: int | None = None, control: Probe | None = None,
+              verbose: bool = True) -> dict:
     """Elicitation pass: add ``alpha * v`` at the probe layer on UNPRESSURED items
-    the model answers CORRECTLY at baseline, and report the wrong-answer rate at
-    each alpha. A causal caving direction makes it climb with alpha."""
+    the model answers CORRECTLY at baseline, and report the wrong-answer rate AND
+    parse rate at each alpha. A causal caving direction makes wrong_rate climb with
+    alpha while the parse rate holds; if ``control`` (a matched random direction) is
+    given, it is swept over the SAME items and scale so the two curves compare
+    directly -- a real effect beats its random control."""
     batch_size = batch_size or default_batch_size(device)
     vec = torch.from_numpy(probe.direction.astype(np.float32))
     items = build_items(examples, pressured=False)
@@ -204,32 +252,47 @@ def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: s
               f"(steering the rest is undefined)")
     if not correct:
         return {"alphas": alphas, "wrong_rate": [float("nan")] * len(alphas),
-                "n_items": 0, "scale": None, "raw": raw}
+                "parse_rate": [float("nan")] * len(alphas), "n_items": 0,
+                "scale": None, "raw": raw, "control": None}
 
     scale = 1.0 if raw else _resid_scale(model, tokenizer, correct, probe.layer,
                                          device, batch_size)
-    curve = []
-    for a in alphas:
-        handle = _install(model, probe.layer, make_add_hook(vec, a * scale))
-        try:
-            counts = _classify(model, tokenizer, correct, device, batch_size,
-                               max_new_tokens, samples, temperature)
-        finally:
-            handle.remove()
-        wr = _wrong_rate(counts)
-        curve.append(wr)
-        if verbose:
-            print(f"    alpha={a:>6.3f}  wrong_rate={wr:.3f}")
-    return {"alphas": alphas, "wrong_rate": curve, "n_items": len(correct),
-            "scale": scale, "raw": raw}
+    real = _add_curve(model, tokenizer, vec, correct, probe.layer, scale, alphas,
+                      device, batch_size, max_new_tokens, samples, temperature,
+                      verbose, tag="probe")
+    ctrl = None
+    if control is not None:
+        cvec = torch.from_numpy(control.direction.astype(np.float32))
+        ctrl = _add_curve(model, tokenizer, cvec, correct, probe.layer, scale, alphas,
+                          device, batch_size, max_new_tokens, samples, temperature,
+                          verbose, tag="random")
+    return {"alphas": alphas, "wrong_rate": real["wrong_rate"],
+            "parse_rate": real["parse_rate"], "n_items": len(correct),
+            "scale": scale, "raw": raw, "control": ctrl}
+
+
+def _ablated_caving(model, tokenizer, vec: torch.Tensor, caved: list[SteerItem],
+                    layer: int, device: str, batch_size: int, max_new_tokens: int,
+                    samples: int, temperature: float) -> float:
+    """Caving rate after projecting ``vec`` (unit) out at ``layer``."""
+    handle = _install(model, layer, make_ablate_hook(vec))
+    try:
+        counts = _classify(model, tokenizer, caved, device, batch_size,
+                           max_new_tokens, samples, temperature)
+    finally:
+        handle.remove()
+    return _wrong_rate(counts)
 
 
 def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device: str,
                 *, samples: int = 1, temperature: float = 0.7,
                 max_new_tokens: int = 24, batch_size: int | None = None,
-                verbose: bool = True) -> dict:
+                control: Probe | None = None, verbose: bool = True) -> dict:
     """Suppression pass: on PRESSURED items the model caves on at baseline, project
-    ``v`` out at the probe layer and report the drop in caving rate."""
+    ``v`` out at the probe layer and report the drop in caving rate. If ``control``
+    (a matched random direction) is given, project IT out of the same items too --
+    removing a random direction should barely move caving, so a real necessity claim
+    needs the probe drop to clear the random drop."""
     batch_size = batch_size or default_batch_size(device)
     vec = torch.from_numpy(probe.direction.astype(np.float32))
     vec = vec / (vec.norm() + 1e-8)  # ablation assumes unit norm
@@ -243,19 +306,23 @@ def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device:
         print(f"  ablate: {len(caved_pairs)}/{len(items)} items caved at baseline")
     if not caved_pairs:
         return {"baseline_caving": float("nan"), "ablated_caving": float("nan"),
-                "n_items": 0}
+                "control_ablated_caving": None, "n_items": 0}
 
     caved = [it for it, _ in caved_pairs]
     baseline_rate = _wrong_rate([c for _, c in caved_pairs])
-    handle = _install(model, probe.layer, make_ablate_hook(vec))
-    try:
-        counts = _classify(model, tokenizer, caved, device, batch_size,
-                           max_new_tokens, samples, temperature)
-    finally:
-        handle.remove()
-    ablated_rate = _wrong_rate(counts)
+    ablated_rate = _ablated_caving(model, tokenizer, vec, caved, probe.layer, device,
+                                   batch_size, max_new_tokens, samples, temperature)
+    control_rate = None
+    if control is not None:
+        cvec = torch.from_numpy(control.direction.astype(np.float32))
+        cvec = cvec / (cvec.norm() + 1e-8)
+        control_rate = _ablated_caving(model, tokenizer, cvec, caved, probe.layer,
+                                       device, batch_size, max_new_tokens, samples,
+                                       temperature)
     if verbose:
         print(f"    baseline caving={baseline_rate:.3f}  "
-              f"ablated caving={ablated_rate:.3f}")
+              f"ablated caving={ablated_rate:.3f}"
+              + (f"  random-ctrl caving={control_rate:.3f}"
+                 if control_rate is not None else ""))
     return {"baseline_caving": baseline_rate, "ablated_caving": ablated_rate,
-            "n_items": len(caved)}
+            "control_ablated_caving": control_rate, "n_items": len(caved)}

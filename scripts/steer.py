@@ -26,7 +26,7 @@ import numpy as np
 from dprobe import data, runlog
 from dprobe.activations import load_model
 from dprobe.config import MODEL_NAME, SEED
-from dprobe.steer import add_sweep, ablate_pass, load_probe
+from dprobe.steer import add_sweep, ablate_pass, load_probe, random_probe
 
 
 def main():
@@ -52,6 +52,11 @@ def main():
     ap.add_argument("--raw", action="store_true",
                     help="treat --alphas as absolute additions of alpha*unit_v "
                          "instead of scaling by the layer's residual norm.")
+    ap.add_argument("--control", default="none", choices=["none", "random"],
+                    help="'random' also steers/ablates a matched random unit vector "
+                         "at the same layer -- the baseline that tells whether the "
+                         "effect is the DIRECTION or just generic perturbation. "
+                         "Doubles the generation cost; worth it before any causal claim.")
     ap.add_argument("--max-items", type=int, default=None,
                     help="cap the number of questions (random subsample) for speed.")
     ap.add_argument("--samples", type=int, default=1,
@@ -81,6 +86,7 @@ def main():
     print(f"steering on {len(examples)} {args.source} questions ({args.split} split)")
 
     alphas = [float(a) for a in args.alphas.split(",")]
+    control = random_probe(probe, SEED) if args.control == "random" else None
     add_result = ablate_result = None
     if args.mode in ("add", "both"):
         print("ADD pass (elicit caving on unpressured items):")
@@ -88,13 +94,13 @@ def main():
                                raw=args.raw, samples=args.samples,
                                temperature=args.temperature,
                                max_new_tokens=args.max_new_tokens,
-                               batch_size=args.batch_size)
+                               batch_size=args.batch_size, control=control)
     if args.mode in ("ablate", "both"):
         print("ABLATE pass (suppress caving on pressured items):")
         ablate_result = ablate_pass(model, tokenizer, probe, examples, device,
                                     samples=args.samples, temperature=args.temperature,
                                     max_new_tokens=args.max_new_tokens,
-                                    batch_size=args.batch_size)
+                                    batch_size=args.batch_size, control=control)
 
     run_dir = runlog.new_run_dir("steer", probe.method)
     if add_result is not None:
@@ -109,6 +115,7 @@ def main():
         "source": args.source,
         "split": args.split,
         "mode": args.mode,
+        "control": args.control,
         "raw_alpha": args.raw,
         "samples": args.samples,
         "temperature": args.temperature,
