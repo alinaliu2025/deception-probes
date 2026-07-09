@@ -28,14 +28,16 @@ def main():
                          "labels from the model's own choice (mandatory there)")
     ap.add_argument("--design", default="completion",
                     choices=["completion", "framing", "behavioral", "rollout"],
-                    help="sycophancy only: 'completion' (default) is the original "
-                         "leaky answer-paste baseline; 'framing' is the instruction "
-                         "contrast (leaks the instruction tokens, ADR 0007); "
+                    help="sycophancy/sandbagging: 'completion' (default) is the "
+                         "original leaky baseline (answer-paste for sycophancy, "
+                         "system-prompt contrast for sandbagging); 'framing' is the "
+                         "instruction contrast (sycophancy only; leaks, ADR 0007); "
                          "'behavioral' labels by the model's own choice under an "
-                         "identical pressure prompt -- requires --filter, and is "
-                         "content-confounded (ADR 0008); 'rollout' labels each "
-                         "SAMPLED answer to the same question (within-question "
-                         "contrast, ADR 0008, pending sign-off) -- requires --filter.")
+                         "identical pressure prompt (sycophancy only; requires "
+                         "--filter, content-confounded, ADR 0008); 'rollout' labels "
+                         "each SAMPLED answer to the same question (within-question "
+                         "contrast, ADR 0008 / ADR 0011 for sandbagging, pending "
+                         "sign-off) -- requires --filter.")
     ap.add_argument("--source", default="opinion",
                     choices=["opinion", "factual", "factual-small"],
                     help="sycophancy behavioral/rollout only: question source. "
@@ -109,30 +111,46 @@ def main():
 
     if args.C is not None and args.method != "lr":
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
-    if args.design != "completion" and args.type != "sycophancy":
-        print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
-    if args.type == "sycophancy" and args.design in ("behavioral", "rollout") and not args.filter:
+    # which (type, design) pairs exist; rollout-knob flags follow from these
+    _rollout_types = ("sycophancy", "sandbagging")  # types with a rollout design
+    if args.design != "completion":
+        if args.type == "sandbagging" and args.design != "rollout":
+            ap.error(f"--design {args.design} is not defined for sandbagging "
+                     "(have 'completion', 'rollout'; ADR 0011)")
+        if args.type not in _rollout_types:
+            print(f"warning: --design is ignored for --type {args.type}")
+    if (args.type in _rollout_types and args.design in ("behavioral", "rollout")
+            and not args.filter):
         ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
     if args.source != "opinion" and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
-        ap.error(f"--source {args.source} requires --type sycophancy and --design "
-                 "behavioral or rollout (no pre-written completion exists, ADR 0009)")
+            (args.type == "sycophancy" and args.design in ("behavioral", "rollout"))
+            or (args.type == "sandbagging" and args.design == "rollout")):
+        ap.error(f"--source {args.source} requires sycophancy --design behavioral/"
+                 "rollout or sandbagging --design rollout (ADR 0009/0011)")
+    if args.type == "sandbagging" and args.design == "rollout" and args.source == "opinion":
+        ap.error("sandbagging --design rollout needs --source factual (ARC) or "
+                 "factual-small (offline fixture); there is no opinion source "
+                 "for sandbagging (ADR 0011)")
     if (args.rollouts is not None or args.temperature is not None
             or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
-            args.type == "sycophancy" and args.design == "rollout"):
+            args.type in _rollout_types and args.design == "rollout"):
         ap.error("--rollouts/--temperature/--max-new-tokens/--rollout-prefix "
-                 "only apply to --type sycophancy --design rollout")
+                 "only apply to --design rollout (sycophancy or sandbagging)")
     gate_overridden = (args.gate != "logprob" or args.gate_n is not None
                        or args.gate_threshold is not None
                        or args.gate_temperature is not None)
     if gate_overridden and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
+            (args.type == "sycophancy" and args.design in ("behavioral", "rollout"))
+            or (args.type == "sandbagging" and args.design == "rollout")):
         ap.error("--gate/--gate-n/--gate-threshold/--gate-temperature only apply "
-                 "to --type sycophancy --design behavioral or rollout")
+                 "to sycophancy --design behavioral/rollout or sandbagging "
+                 "--design rollout")
     if (args.gate_n is not None or args.gate_threshold is not None
             or args.gate_temperature is not None) and args.gate != "sampled":
         ap.error("--gate-n/--gate-threshold/--gate-temperature require --gate sampled")
+    # knobs live per-module: sycophancy keeps its own copies (untouched); the
+    # shared engine (used by sandbagging, ADR 0011) has its own in data.rollout
     if args.type == "sycophancy" and args.design in ("behavioral", "rollout"):
         from dprobe.data import sycophancy as _syc
         _syc.GATE_MODE = args.gate
@@ -152,6 +170,23 @@ def main():
             _syc.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
         if args.rollout_prefix is not None:
             _syc.ROLLOUT_PREFIX_MODE = args.rollout_prefix
+    if args.type == "sandbagging" and args.design == "rollout":
+        from dprobe.data import rollout as _ro
+        _ro.GATE_MODE = args.gate
+        if args.gate_n is not None:
+            _ro.GATE_N = args.gate_n
+        if args.gate_threshold is not None:
+            _ro.GATE_THRESHOLD = args.gate_threshold
+        if args.gate_temperature is not None:
+            _ro.GATE_TEMPERATURE = args.gate_temperature
+        if args.rollouts is not None:
+            _ro.ROLLOUT_N = args.rollouts
+        if args.temperature is not None:
+            _ro.ROLLOUT_TEMPERATURE = args.temperature
+        if args.max_new_tokens is not None:
+            _ro.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
+        if args.rollout_prefix is not None:
+            _ro.ROLLOUT_PREFIX_MODE = args.rollout_prefix
     if args.read_prompt == "neutral" and not (
             args.type == "sycophancy" and args.design == "behavioral"):
         ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "
@@ -222,10 +257,11 @@ def main():
     runlog.write_meta(run_dir, {
         "kind": "train_one",
         "type": args.type,
-        "design": args.design if args.type == "sycophancy" else "n/a",
-        "source": args.source if args.type == "sycophancy" else "n/a",
-        "gate": args.gate if (args.type == "sycophancy"
-                              and args.design in ("behavioral", "rollout")) else "n/a",
+        "design": args.design if args.type in ("sycophancy", "sandbagging") else "n/a",
+        "source": args.source if args.type in ("sycophancy", "sandbagging") else "n/a",
+        "gate": args.gate if (
+            (args.type == "sycophancy" and args.design in ("behavioral", "rollout"))
+            or (args.type == "sandbagging" and args.design == "rollout")) else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,

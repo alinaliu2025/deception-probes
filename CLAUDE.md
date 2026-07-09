@@ -28,6 +28,11 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
 - Install: `pip install -e ".[dev]"`
 - Fast tests: `pytest -q`
 - One type: `python -m scripts.train_one --type sycophancy`
+  - sandbagging (ADR 0011, Proposed): `--type sandbagging --design rollout
+    --source factual --filter` = within-question rollout design on the shared
+    ARC MCQ source (`data/mcq.py` + `data/rollout.py`); the capability filter
+    is the rollout gate there. Default sandbagging design is still the leaky
+    12-item system-prompt contrast (do not trust its AUROC).
   - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
   - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
   - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
