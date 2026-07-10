@@ -32,3 +32,6 @@ CLAUDE.local.md
 
 # personal documentation (root-level only; a bare 'docs' would also re-ignore .claude/docs)
 /docs/
+
+# macOS noise
+.DS_Store
