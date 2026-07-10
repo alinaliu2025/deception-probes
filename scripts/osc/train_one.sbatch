@@ -32,4 +32,7 @@ cd /fs/ess/PAS2324/dprobe-alina
 echo "Job $SLURM_JOB_ID on $(hostname) — model: $DPROBE_MODEL"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-python -m scripts.train_one --type sycophancy --design rollout --source factual --filter "$@"
+# NOTE: --model must be passed explicitly; train_one does NOT read $DPROBE_MODEL
+# (the 2026-07-09 p0256 run silently used the 0.5B default because of this)
+python -m scripts.train_one --model "$DPROBE_MODEL" \
+    --type sycophancy --design rollout --source factual --filter "$@"
