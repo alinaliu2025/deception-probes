@@ -37,6 +37,15 @@ def main():
     if args.C is not None and args.method != "lr":
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
 
+    # run dir exists from the very start so console.log records the whole run;
+    # meta.json is written last, so a dir without it is a crashed/aborted run
+    run_dir = runlog.new_run_dir("compare", args.method)
+    with runlog.capture_console(run_dir):
+        run(args, run_dir)
+
+
+def run(args, run_dir):
+    print(f"run dir: {run_dir}")
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
@@ -66,7 +75,6 @@ def main():
     for i, t in enumerate(types):
         print(f"{t[:6]:>6}  " + "  ".join(f"{cos[i, j]:>6.2f}" for j in range(len(types))))
 
-    run_dir = runlog.new_run_dir("compare", args.method)
     report_comparison(M, cos, types, args.method, run_dir)
     np.save(run_dir / f"transfer_matrix_{args.method}.npy", M)
     for t, probe in probes.items():

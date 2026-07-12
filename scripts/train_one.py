@@ -156,7 +156,25 @@ def main():
             args.type == "sycophancy" and args.design == "behavioral"):
         ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "
                  "(labels + the stripped prompt come from the behavioral filter)")
+    if args.filter:
+        if data.FILTERS.get(args.type) is None:
+            ap.error(f"--filter is not defined for --type {args.type} "
+                     f"(have {sorted(data.FILTERS)})")
+        if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout"):
+            ap.error("--filter for sycophancy requires --design framing, "
+                     "behavioral or rollout (completion has no model choice)")
 
+    # run dir exists from the very start so console.log records the whole run;
+    # meta.json is written last, so a dir without it is a crashed/aborted run
+    kind = ("permctrl" if args.permute
+            else "neutralctrl" if args.read_prompt == "neutral" else args.type)
+    run_dir = runlog.new_run_dir(kind, args.method)
+    with runlog.capture_console(run_dir):
+        run(args, run_dir)
+
+
+def run(args, run_dir):
+    print(f"run dir: {run_dir}")
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
@@ -170,13 +188,7 @@ def main():
     filter_stats = None
     filter_log = None
     if args.filter:
-        flt = data.FILTERS.get(args.type)
-        if flt is None:
-            ap.error(f"--filter is not defined for --type {args.type} "
-                     f"(have {sorted(data.FILTERS)})")
-        if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout"):
-            ap.error("--filter for sycophancy requires --design framing, "
-                     "behavioral or rollout (completion has no model choice)")
+        flt = data.FILTERS[args.type]
         before = len(examples)
         examples = flt(model, tokenizer, device, examples)
         filter_stats = getattr(flt, "last_stats", None)
@@ -208,10 +220,6 @@ def main():
     aurocs, best_layer, probe = layer_sweep(acts, labels, args.method, args.type, groups, C=args.C)
     print(f"best layer {best_layer} | held-out AUROC {aurocs[best_layer]:.3f}")
 
-    # immutable, self-describing run dir; meta.json is the part tracked in git
-    kind = ("permctrl" if args.permute
-            else "neutralctrl" if args.read_prompt == "neutral" else args.type)
-    run_dir = runlog.new_run_dir(kind, args.method)
     out = report_one_type(acts, labels, aurocs, best_layer, probe, args.method, groups, run_dir)
     np.savez(run_dir / "probe.npz", direction=probe.direction, bias=probe.bias,
              layer=probe.layer, method=probe.method, deception_type=probe.deception_type)

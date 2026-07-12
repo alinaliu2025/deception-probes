@@ -54,19 +54,42 @@ def capability_filter(model, tokenizer, device, examples: list[Example]) -> list
 
     Without this, a wrong "deceptive" answer might just be incompetence, which would
     poison the probe. This is a string-match check; swap in a stricter grader for real
-    runs. Returns a filtered, still-balanced list of Examples.
+    runs. Returns a filtered, still-balanced list of Examples. Run stats land in
+    ``capability_filter.last_stats`` and the per-question trace (with each control
+    generation's full text) in ``capability_filter.last_log``.
     """
     from ..activations import build_prompt
+    from ..tracefmt import qtext, render, short
     import torch
 
     keep_questions = set()
+    q_records = []  # one per control question, for the run trace
     controls = [e for e in examples if e.label == 0]
     for e in controls:
         prompt = build_prompt(tokenizer, e)
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         with torch.no_grad():
             gen = model.generate(**inputs, max_new_tokens=20, do_sample=False)
-        text = tokenizer.decode(gen[0][inputs["input_ids"].shape[1]:]).lower()
-        if e.meta["answer"].lower() in text:
+        text = tokenizer.decode(gen[0][inputs["input_ids"].shape[1]:])
+        correct = e.meta["answer"].lower() in text.lower()
+        if correct:
             keep_questions.add(e.user)
-    return [e for e in examples if e.user in keep_questions]
+        q_records.append({"question": e.user, "expected": e.meta["answer"],
+                          "generated": text, "correct": correct})
+    out = [e for e in examples if e.user in keep_questions]
+    capability_filter.last_stats = {
+        "questions_in": len(controls),
+        "kept_questions": len(keep_questions),
+        "n_examples": len(out),
+    }
+    body = ["legend: KEPT = control-prompt generation contains the expected "
+            "answer (string match); DROPPED = it does not, so a wrong answer "
+            "under the sandbag prompt could be mere incompetence"]
+    for r in q_records:
+        status = "KEPT" if r["correct"] else "DROPPED"
+        body.append(f"[{status}] expected={r['expected']!r} :: {short(r['question'])}")
+        body.append(f"    generated {qtext(r['generated'])}")
+    capability_filter.last_log = render(
+        "SANDBAGGING CAPABILITY FILTER RUN LOG", capability_filter.last_stats,
+        [(f"PER-QUESTION DECISIONS ({len(q_records)})", body)])
+    return out

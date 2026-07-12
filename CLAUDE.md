@@ -51,9 +51,12 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     `sampled` = generate `--gate-n` (20) answers unpressured, keep if correct on
     ≥ `--gate-threshold` (0.9) at `--gate-temperature` (0.7) — the "model is SURE"
     gate; opt-in, costs a generate call per question
-  - rollout runs write `results/runs/<run>/run_log.txt`: per-question gate result,
-    parsed rollout outcomes, and set membership (USED / AMBIVALENT-BUT-TRIMMED /
-    SINGLE-CLASS). See `.claude/docs/rollouts-explained.md` for a plain-language
+  - every run writes `console.log` into its run dir (timestamped tee of ALL
+    stdout/stderr incl. tracebacks) and every per-item decider (all filters, the
+    belief gate, steering) writes `run_log.txt` — the filter trace: gate
+    evidence, full generated texts, keep/drop/relabel verdicts (ADR 0011).
+    Rollout traces show set membership (USED / AMBIVALENT-BUT-TRIMMED /
+    SINGLE-CLASS); see `.claude/docs/rollouts-explained.md` for a plain-language
     walkthrough of the rollout design.
 - Full comparison: `python -m scripts.compare --method lr`
 - Steering (causal check, ADR 0010): `python -m scripts.steer --probe
@@ -81,6 +84,12 @@ Architecture Decision Records live in `.claude/docs/adr/`. Use sequential number
 - Each run writes its own dir `results/runs/<utc>_<kind>_<method>_<sha>_<host>/`
   (via `runlog`). Only `meta.json` is git-tracked (cross-machine source of truth);
   heavy `.npy`/`.png` artifacts are gitignored and regenerable.
+- The run dir is created at the START of a run; `meta.json` is written last, so a
+  dir without it is a crashed/aborted run and its `console.log` is the post-mortem
+  (ADR 0011). Vocabulary: `console.log` = raw timestamped stream, `run_log.txt` =
+  structured filter trace (see CONTEXT.md).
+- A new filter should set `last_stats` (goes into meta.json) AND `last_log` (the
+  filter trace, written to run_log.txt); render traces with `dprobe.tracefmt`.
 
 ## IMPORTANT
 

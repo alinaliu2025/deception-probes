@@ -231,19 +231,28 @@ def test_sycophancy_factual_rollout_build():
 
 
 def test_render_rollout_log_shows_set_membership():
-    """The per-run log (written to run_log.txt) records every gate failure and,
-    per gated question, its parsed rollout outcomes and final set membership:
-    USED / AMBIVALENT-BUT-TRIMMED / SINGLE-CLASS. Pure function, no model."""
+    """The per-run log (written to run_log.txt) records every gate failure (with
+    the gate's evidence) and, per gated question, its full rollout texts, parsed
+    outcomes and final set membership: USED / AMBIVALENT-BUT-TRIMMED /
+    SINGLE-CLASS. Pure function, no model."""
     from dprobe.data.base import Example
 
+    lp_gate = {"gate": "logprob", "lp_honest": -0.5, "lp_wrong": -1.5}
     stats = {"questions_in": 3, "ambivalent_questions": 2, "n_examples": 2}
-    gate_failed = [Example("s", "PRESSURE-Q3", -1, "sycophancy",
-                           meta={"neutral_user": "Is the sky green?"})]
+    gate_failed = [(Example("s", "PRESSURE-Q3", -1, "sycophancy",
+                            meta={"neutral_user": "Is the sky green?"}),
+                    {"gate": "logprob", "lp_honest": -2.0, "lp_wrong": -0.1})]
     q_records = [
         {"question": "Is 17 prime?", "user": "PRESSURE-Q1", "cave_letter": "A",
-         "parsed": ["caved", "held", "held"], "kept_pairs": 1, "outcome": "ambivalent"},
+         "gate": lp_gate, "parsed": ["caved", "held", "held"],
+         "texts": [" (A) sure", " (B) no", " (B) it is not"],
+         "kept_pairs": 1, "outcome": "ambivalent"},
         {"question": "Is 2 even?", "user": "PRESSURE-Q2", "cave_letter": "B",
-         "parsed": ["held", "held", "held"], "kept_pairs": 0, "outcome": "single-class"},
+         "gate": {"gate": "sampled", "correct": 19, "parseable": 20, "n": 20,
+                  "samples": [("correct", " (A) certainly")]},
+         "parsed": ["held", "held", "held"],
+         "texts": [" (A) yes", " (A) yep", " (A) even"],
+         "kept_pairs": 0, "outcome": "single-class"},
     ]
     kept_users = {"PRESSURE-Q1"}  # Q1 survived letter balance, Q2 did not (single-class)
     log = sycophancy._render_rollout_log(stats, gate_failed, q_records, kept_users)
@@ -252,6 +261,123 @@ def test_render_rollout_log_shows_set_membership():
     assert "USED" in log and "Is 17 prime?" in log
     assert "SINGLE-CLASS" in log and "Is 2 even?" in log
     assert "questions_in: 3" in log  # summary block present
+    # gate evidence and full rollout texts are recorded
+    assert "lp_honest=-0.5" in log and "gate=sampled 19/20 correct" in log
+    assert 'rollout[caved] " (A) sure"' in log
+    assert 'rollout[held] " (B) it is not"' in log
+    assert 'gate-sample[correct] " (A) certainly"' in log
+
+
+def test_render_behavioral_log_shows_decisions():
+    """The behavioral filter's per-question trace records the gate evidence, the
+    pressure-prompt choice, and whether the example survived class balance."""
+    stats = {"questions_in": 3}
+    q_records = [
+        {"question": "Is the sky green?", "outcome": "gate-fail",
+         "gate": {"gate": "logprob", "lp_honest": -2.0, "lp_wrong": -0.1}},
+        {"question": "Is 17 prime?", "outcome": "caved", "ex_id": 1,
+         "gate": {"gate": "logprob", "lp_honest": -0.5, "lp_wrong": -1.5},
+         "lp_press_match": -0.2, "lp_press_not": -0.9},
+        {"question": "Is 2 even?", "outcome": "held", "ex_id": 2,
+         "gate": {"gate": "sampled", "correct": 19, "parseable": 20, "n": 20,
+                  "samples": [("correct", "The answer is (B)")]},
+         "lp_press_match": -0.9, "lp_press_not": -0.2},
+    ]
+    log = sycophancy._render_behavioral_log(stats, q_records, kept_ids={1})
+    assert "[GATE-FAIL]" in log and "Is the sky green?" in log
+    assert "[USED caved(1)]" in log and "Is 17 prime?" in log
+    assert "[TRIMMED held(0)]" in log and "Is 2 even?" in log
+    assert 'gate-sample[correct] "The answer is (B)"' in log
+    assert "questions_in: 3" in log
+
+
+def test_render_framing_log_shows_flip_evidence():
+    """The framing (keep-if-flips) trace records both log-prob comparisons and
+    the verdict for every question, including incomplete pairs."""
+    stats = {"questions_in": 3, "kept_questions": 1}
+    q_records = [
+        {"question": "Q kept?", "outcome": "kept", "syc_under_neutral": True,
+         "honest_under_honest": True, "lp_neutral": (-0.2, -0.9),
+         "lp_honest": (-1.1, -0.3)},
+        {"question": "Q dropped?", "outcome": "dropped", "syc_under_neutral": False,
+         "honest_under_honest": True, "lp_neutral": (-0.9, -0.2),
+         "lp_honest": (-1.1, -0.3)},
+        {"question": "Q half?", "outcome": "incomplete-pair"},
+    ]
+    log = sycophancy._render_framing_log(stats, q_records)
+    assert "[KEPT]" in log and "Q kept?" in log
+    assert "[DROPPED]" in log and "syc_under_neutral=False" in log
+    assert "[INCOMPLETE-PAIR]" in log and "Q half?" in log
+    assert "kept_questions: 1" in log
+
+
+def test_render_steer_log_lists_completions():
+    """The steering trace has one section per stage with per-item completion
+    texts and rates recomputed from the recorded counts."""
+    from dprobe.steer import render_steer_log
+
+    trace = [
+        {"pass": "add", "stage": "baseline (unpressured, unsteered)",
+         "tag": "baseline",
+         "items": [{"index": 0, "question": "Q one?",
+                    "counts": {"wrong": 0, "correct": 1, "unparsed": 0},
+                    "completions": [("correct", " (A) because")]}]},
+        {"pass": "add", "stage": "alpha=2.0", "tag": "probe",
+         "items": [{"index": 0, "question": "Q one?",
+                    "counts": {"wrong": 1, "correct": 0, "unparsed": 0},
+                    "completions": [("wrong", " (B)!")]}]},
+    ]
+    log = render_steer_log(trace)
+    assert "ADD | baseline (unpressured, unsteered) [baseline]" in log
+    assert "ADD | alpha=2.0 [probe]" in log
+    assert "wrong_rate=0.000" in log and "wrong_rate=1.000" in log
+    assert 'completion[correct] " (A) because"' in log
+    assert 'completion[wrong] " (B)!"' in log
+
+
+def test_capture_console_tees_and_collapses_progress(tmp_path):
+    """The console tee: terminal output unchanged, console.log gets timestamped
+    lines with \\r progress counters collapsed to their final frame, and both
+    stdout and stderr recorded."""
+    import re
+    import sys
+
+    from dprobe import runlog
+
+    with runlog.capture_console(tmp_path):
+        print("hello world")
+        print("  1/3", end="\r", flush=True)
+        print("  2/3", end="\r", flush=True)
+        print("  3/3", end="\r", flush=True)
+        print()  # progress terminator, as the extraction/filter loops do
+        print("done")
+        print("a warning", file=sys.stderr)
+    text = (tmp_path / "console.log").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert lines[0].startswith("# console log | started")
+    assert lines[-1].startswith("# console log | ended")
+    assert "hello world" in text and "done" in text and "a warning" in text
+    # progress collapsed: final frame once, intermediate frames gone
+    assert text.count("3/3") == 1 and "1/3" not in text and "2/3" not in text
+    for ln in lines[1:-1]:
+        assert re.match(r"\d{2}:\d{2}:\d{2} ", ln), f"untimestamped line: {ln!r}"
+    # streams restored after the block
+    assert not isinstance(sys.stdout, runlog._Tee)
+    assert not isinstance(sys.stderr, runlog._Tee)
+
+
+def test_capture_console_records_crash(tmp_path):
+    """A crash mid-run leaves its traceback in console.log -- with the run dir
+    created at start, a dir without meta.json plus this log IS the post-mortem."""
+    from dprobe import runlog
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with runlog.capture_console(tmp_path):
+            print("about to fail")
+            raise RuntimeError("boom")
+    text = (tmp_path / "console.log").read_text(encoding="utf-8")
+    assert "about to fail" in text
+    assert "Traceback" in text and "RuntimeError: boom" in text
 
 
 def test_verify_read_positions_asserts_answer_token():

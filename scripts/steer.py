@@ -26,7 +26,8 @@ import numpy as np
 from dprobe import data, runlog
 from dprobe.activations import load_model
 from dprobe.config import MODEL_NAME, SEED
-from dprobe.steer import add_sweep, ablate_pass, load_probe, random_probe
+from dprobe.steer import (add_sweep, ablate_pass, load_probe, random_probe,
+                          render_steer_log)
 
 
 def main():
@@ -71,6 +72,16 @@ def main():
     args = ap.parse_args()
 
     probe = load_probe(args.probe)
+
+    # run dir exists from the very start so console.log records the whole run;
+    # meta.json is written last, so a dir without it is a crashed/aborted run
+    run_dir = runlog.new_run_dir("steer", probe.method)
+    with runlog.capture_console(run_dir):
+        run(args, probe, run_dir)
+
+
+def run(args, probe, run_dir):
+    print(f"run dir: {run_dir}")
     print(f"probe: {probe.deception_type} | method {probe.method} | layer {probe.layer}")
 
     model_name = args.model or MODEL_NAME
@@ -88,21 +99,26 @@ def main():
     alphas = [float(a) for a in args.alphas.split(",")]
     control = random_probe(probe, SEED) if args.control == "random" else None
     add_result = ablate_result = None
+    trace: list = []  # per-item events (full completion texts) for run_log.txt
     if args.mode in ("add", "both"):
         print("ADD pass (elicit caving on unpressured items):")
         add_result = add_sweep(model, tokenizer, probe, examples, device, alphas,
                                raw=args.raw, samples=args.samples,
                                temperature=args.temperature,
                                max_new_tokens=args.max_new_tokens,
-                               batch_size=args.batch_size, control=control)
+                               batch_size=args.batch_size, control=control,
+                               trace=trace)
     if args.mode in ("ablate", "both"):
         print("ABLATE pass (suppress caving on pressured items):")
         ablate_result = ablate_pass(model, tokenizer, probe, examples, device,
                                     samples=args.samples, temperature=args.temperature,
                                     max_new_tokens=args.max_new_tokens,
-                                    batch_size=args.batch_size, control=control)
+                                    batch_size=args.batch_size, control=control,
+                                    trace=trace)
 
-    run_dir = runlog.new_run_dir("steer", probe.method)
+    if trace:
+        (run_dir / "run_log.txt").write_text(render_steer_log(trace), encoding="utf-8")
+        print(f"wrote per-item steering trace -> {run_dir / 'run_log.txt'}")
     if add_result is not None:
         np.save(run_dir / "add_curve.npy",
                 np.array([add_result["alphas"], add_result["wrong_rate"]]))

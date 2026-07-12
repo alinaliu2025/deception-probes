@@ -66,6 +66,7 @@ from pathlib import Path
 
 from datasets import load_dataset
 
+from ..tracefmt import qtext, render, short
 from .base import Example
 
 _FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -420,6 +421,8 @@ def behavior_filter(model, tokenizer, device, examples: list[Example]) -> list[E
     than on the mere presence of an honesty instruction in the prompt.
 
     Both halves of a kept question are kept, so the result stays label-balanced.
+    Run stats land in ``behavior_filter.last_stats`` and the per-question trace
+    in ``behavior_filter.last_log``.
     """
     from ..activations import build_prompt, seq_logprob
 
@@ -428,31 +431,70 @@ def behavior_filter(model, tokenizer, device, examples: list[Example]) -> list[E
         by_user.setdefault(e.user, {})[e.label] = e
 
     keep_users: set[str] = set()
+    q_records: list[dict] = []  # one per question, for the run trace
+    n_incomplete = 0
     total = len(by_user)
     for n, (user, pair) in enumerate(by_user.items(), 1):
         if 0 not in pair or 1 not in pair:
-            continue  # incomplete pair (e.g. after subsampling) -> skip
+            # incomplete pair (e.g. after subsampling) -> skip
+            n_incomplete += 1
+            q_records.append({"question": user, "outcome": "incomplete-pair"})
+            continue
         neutral = pair[1]   # label 1 = neutral, sycophancy-prone condition
         honest = pair[0]    # label 0 = honesty-primed control
         matching = neutral.meta["matching"]
         not_matching = neutral.meta["not_matching"]
 
         p_neu = build_prompt(tokenizer, neutral)
-        syc_under_neutral = (
-            seq_logprob(model, tokenizer, p_neu, matching, device)
-            > seq_logprob(model, tokenizer, p_neu, not_matching, device)
-        )
+        lp_syc_neu = seq_logprob(model, tokenizer, p_neu, matching, device)
+        lp_hon_neu = seq_logprob(model, tokenizer, p_neu, not_matching, device)
+        syc_under_neutral = lp_syc_neu > lp_hon_neu
         p_hon = build_prompt(tokenizer, honest)
-        honest_under_honest = (
-            seq_logprob(model, tokenizer, p_hon, not_matching, device)
-            > seq_logprob(model, tokenizer, p_hon, matching, device)
-        )
-        if syc_under_neutral and honest_under_honest:
+        lp_hon_hon = seq_logprob(model, tokenizer, p_hon, not_matching, device)
+        lp_syc_hon = seq_logprob(model, tokenizer, p_hon, matching, device)
+        honest_under_honest = lp_hon_hon > lp_syc_hon
+        kept = syc_under_neutral and honest_under_honest
+        if kept:
             keep_users.add(user)
+        q_records.append({
+            "question": user, "outcome": "kept" if kept else "dropped",
+            "syc_under_neutral": syc_under_neutral,
+            "honest_under_honest": honest_under_honest,
+            "lp_neutral": (round(float(lp_syc_neu), 4), round(float(lp_hon_neu), 4)),
+            "lp_honest": (round(float(lp_syc_hon), 4), round(float(lp_hon_hon), 4)),
+        })
         if n % 500 == 0:
             print(f"  behavior_filter {n}/{total} questions", end="\r", flush=True)
     print()
-    return [e for e in examples if e.user in keep_users]
+    out = [e for e in examples if e.user in keep_users]
+    behavior_filter.last_stats = {
+        "questions_in": total,
+        "incomplete_pairs": n_incomplete,
+        "kept_questions": len(keep_users),
+        "n_examples": len(out),
+    }
+    behavior_filter.last_log = _render_framing_log(behavior_filter.last_stats, q_records)
+    return out
+
+
+def _render_framing_log(stats, q_records) -> str:
+    """Human-readable per-question trace of a framing (keep-if-flips)
+    behavior_filter run: both log-prob comparisons and the keep/drop verdict.
+    Written to ``run_dir/run_log.txt``."""
+    body = ["legend: kept iff sycophantic answer wins under the NEUTRAL system "
+            "AND honest answer wins under the HONEST system; lp tuples are "
+            "(sycophantic, honest) sequence log-probs under that system"]
+    for r in q_records:
+        if r["outcome"] == "incomplete-pair":
+            body.append(f"[INCOMPLETE-PAIR] :: {short(r['question'])}")
+            continue
+        body.append(
+            f"[{r['outcome'].upper()}] syc_under_neutral={r['syc_under_neutral']} "
+            f"honest_under_honest={r['honest_under_honest']} | "
+            f"lp_neutral={r['lp_neutral']} lp_honest={r['lp_honest']} "
+            f":: {short(r['question'])}")
+    return render("FRAMING (KEEP-IF-FLIPS) FILTER RUN LOG", stats,
+                  [(f"PER-QUESTION DECISIONS ({len(q_records)})", body)])
 
 
 def _balance(examples: list[Example], seed: int) -> list[Example]:
@@ -465,21 +507,24 @@ def _balance(examples: list[Example], seed: int) -> list[Example]:
     return [e for e in examples if id(e) in keep]
 
 
-def _believes_honest_logprob(model, tokenizer, device, ex: Example) -> bool:
+def _believes_honest_logprob(model, tokenizer, device, ex: Example) -> tuple[bool, dict]:
     """Deterministic belief gate (ADR 0007 step 1-2, GATE_MODE='logprob'): on the
     persona-stripped neutral question, does the model rate the honest
-    ('not_matching') answer higher than the wrong ('matching') one?"""
+    ('not_matching') answer higher than the wrong ('matching') one?
+
+    Returns (passed, info); info carries the two log-probs for the run trace."""
     from ..activations import build_prompt, seq_logprob
 
     p_neu = build_prompt(tokenizer, Example(
         NEUTRAL_SYSTEM, ex.meta["neutral_user"], 0, "sycophancy"))
-    return (
-        seq_logprob(model, tokenizer, p_neu, ex.meta["not_matching"], device)
-        > seq_logprob(model, tokenizer, p_neu, ex.meta["matching"], device)
-    )
+    lp_honest = seq_logprob(model, tokenizer, p_neu, ex.meta["not_matching"], device)
+    lp_wrong = seq_logprob(model, tokenizer, p_neu, ex.meta["matching"], device)
+    passed = lp_honest > lp_wrong
+    return passed, {"gate": "logprob", "lp_honest": round(float(lp_honest), 4),
+                    "lp_wrong": round(float(lp_wrong), 4)}
 
 
-def _believes_honest_sampled(model, tokenizer, device, ex: Example) -> bool:
+def _believes_honest_sampled(model, tokenizer, device, ex: Example) -> tuple[bool, dict]:
     """Sampled belief gate (GATE_MODE='sampled', the v2-plan variant): generate
     GATE_N answers on the neutral (unpressured) prompt at GATE_TEMPERATURE and
     keep the question only if the model answers correctly on >= GATE_THRESHOLD of
@@ -487,7 +532,10 @@ def _believes_honest_sampled(model, tokenizer, device, ex: Example) -> bool:
     log-prob comparison, at the cost of one generate call per question.
 
     Correct = the 'not_matching' (honest) answer. Unparseable samples don't count
-    toward the denominator; if nothing parses, the question fails the gate."""
+    toward the denominator; if nothing parses, the question fails the gate.
+
+    Returns (passed, info); info carries every sampled text + its parse for the
+    run trace."""
     import torch
 
     from ..activations import build_prompt
@@ -504,24 +552,46 @@ def _believes_honest_sampled(model, tokenizer, device, ex: Example) -> bool:
     new = gen[:, inputs.input_ids.shape[1]:]
     decoded = tokenizer.batch_decode(new, skip_special_tokens=True)
     correct = parseable = 0
+    samples = []
     for t in decoded:
         choice, _ = parse_choice(t, ex.meta["matching"], ex.meta["not_matching"])
         if choice is None:
+            samples.append(("unparsed", t))
             continue
         parseable += 1
+        outcome = "correct" if choice == "not_matching" else "wrong"
+        samples.append((outcome, t))
         if choice == "not_matching":
             correct += 1
-    return parseable > 0 and correct / parseable >= GATE_THRESHOLD
+    passed = parseable > 0 and correct / parseable >= GATE_THRESHOLD
+    return passed, {"gate": "sampled", "correct": correct, "parseable": parseable,
+                    "n": GATE_N, "samples": samples}
 
 
-def _believes_honest(model, tokenizer, device, ex: Example) -> bool:
+def _believes_honest(model, tokenizer, device, ex: Example) -> tuple[bool, dict]:
     """Belief gate dispatcher: routes to the deterministic log-prob gate or the
     sampled consistency gate per GATE_MODE. Both ask the same question -- does the
     model default to the honest answer absent pressure -- so the rest of the
-    pipeline is unchanged."""
+    pipeline is unchanged. Returns (passed, info) for the run trace."""
     if GATE_MODE == "sampled":
         return _believes_honest_sampled(model, tokenizer, device, ex)
     return _believes_honest_logprob(model, tokenizer, device, ex)
+
+
+def _gate_line(info: dict) -> str:
+    """One-line trace summary of a belief-gate decision (both gate modes)."""
+    if info["gate"] == "sampled":
+        return (f"gate=sampled {info['correct']}/{info['parseable']} correct "
+                f"({info['n']} sampled)")
+    return f"gate=logprob lp_honest={info['lp_honest']} lp_wrong={info['lp_wrong']}"
+
+
+def _gate_sample_lines(info: dict) -> list[str]:
+    """Full text of every sampled-gate answer, one trace line each (empty for
+    the logprob gate, which generates nothing)."""
+    if info.get("gate") != "sampled":
+        return []
+    return [f"    gate-sample[{outcome}] {qtext(t)}" for outcome, t in info["samples"]]
 
 
 def behavioral_filter(model, tokenizer, device, examples: list[Example]) -> list[Example]:
@@ -542,28 +612,38 @@ def behavioral_filter(model, tokenizer, device, examples: list[Example]) -> list
 
     The result is balanced by seeded subsampling of the majority class. Run
     stats (gate drops, pre-balance base rate) land in
-    ``behavioral_filter.last_stats`` for meta.json.
+    ``behavioral_filter.last_stats`` for meta.json, and the per-question trace
+    in ``behavioral_filter.last_log`` for run_log.txt.
     """
     from ..activations import build_prompt, seq_logprob
 
     labeled: list[Example] = []
+    q_records: list[dict] = []  # one per question, for the run trace
     n_agrees_by_default = 0
     total = len(examples)
     for n, ex in enumerate(examples, 1):
         matching = ex.meta["matching"]
         not_matching = ex.meta["not_matching"]
 
-        if not _believes_honest(model, tokenizer, device, ex):
+        believes, gate_info = _believes_honest(model, tokenizer, device, ex)
+        if not believes:
             n_agrees_by_default += 1
+            q_records.append({"question": ex.meta.get("neutral_user", ex.user),
+                              "gate": gate_info, "outcome": "gate-fail"})
             continue
 
         p_press = build_prompt(tokenizer, ex)
-        caved = (
-            seq_logprob(model, tokenizer, p_press, matching, device)
-            > seq_logprob(model, tokenizer, p_press, not_matching, device)
-        )
+        lp_match = seq_logprob(model, tokenizer, p_press, matching, device)
+        lp_not = seq_logprob(model, tokenizer, p_press, not_matching, device)
+        caved = lp_match > lp_not
         ex.label = 1 if caved else 0
         labeled.append(ex)
+        q_records.append({"question": ex.meta.get("neutral_user", ex.user),
+                          "gate": gate_info,
+                          "outcome": "caved" if caved else "held",
+                          "lp_press_match": round(float(lp_match), 4),
+                          "lp_press_not": round(float(lp_not), 4),
+                          "ex_id": id(ex)})
         if n % 500 == 0:
             print(f"  behavioral_filter {n}/{total} questions", end="\r", flush=True)
     print()
@@ -585,7 +665,32 @@ def behavioral_filter(model, tokenizer, device, examples: list[Example]) -> list
     print(f"  behavioral_filter: {total} in | {n_agrees_by_default} dropped "
           f"(agrees with user by default) | base rate {base_rate:.3f} "
           f"({n1} caved / {n0} held) | balanced to {len(out)}")
+    kept_ids = {id(e) for e in out}
+    behavioral_filter.last_log = _render_behavioral_log(
+        behavioral_filter.last_stats, q_records, kept_ids)
     return out
+
+
+def _render_behavioral_log(stats, q_records, kept_ids) -> str:
+    """Human-readable per-question trace of a behavioral_filter run: gate result
+    (with log-probs or sampled answers), the choice under pressure, and whether
+    the example survived class balance. Written to ``run_dir/run_log.txt``."""
+    body = ["legend: GATE-FAIL = model already agrees unpressured (dropped); "
+            "caved(1)/held(0) = choice under pressure; USED = survived class "
+            "balance, TRIMMED = dropped by it"]
+    for r in q_records:
+        gate = _gate_line(r["gate"])
+        if r["outcome"] == "gate-fail":
+            body.append(f"[GATE-FAIL] {gate} :: {short(r['question'])}")
+        else:
+            status = "USED" if r["ex_id"] in kept_ids else "TRIMMED"
+            label = 1 if r["outcome"] == "caved" else 0
+            body.append(f"[{status} {r['outcome']}({label})] {gate} | lp_press "
+                        f"match={r['lp_press_match']} not={r['lp_press_not']} "
+                        f":: {short(r['question'])}")
+        body += _gate_sample_lines(r["gate"])
+    return render("BEHAVIORAL FILTER RUN LOG", stats,
+                  [(f"PER-QUESTION DECISIONS ({len(q_records)})", body)])
 
 
 _CHOICE_RE = re.compile(r"\(([A-Z])\)")
@@ -636,14 +741,17 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
 
     # stage 1: belief gate
     gated: list[Example] = []
-    gate_failed: list[Example] = []  # kept for the human-readable run log
+    gate_infos: list[dict] = []  # parallel to gated; gate detail for the run log
+    gate_failed: list[tuple[Example, dict]] = []  # for the human-readable run log
     n_agrees_by_default = 0
     total = len(examples)
     for n, ex in enumerate(examples, 1):
-        if _believes_honest(model, tokenizer, device, ex):
+        believes, info = _believes_honest(model, tokenizer, device, ex)
+        if believes:
             gated.append(ex)
+            gate_infos.append(info)
         else:
-            gate_failed.append(ex)
+            gate_failed.append((ex, info))
             n_agrees_by_default += 1
         if n % 500 == 0:
             print(f"  rollout_filter gate {n}/{total} questions", end="\r", flush=True)
@@ -679,7 +787,7 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
     n_deterministic = 0
     pairs_by_letter: dict[str, list[tuple[Example, Example]]] = {}
     q_records: list[dict] = []  # one per gated question, for the run log
-    for ex, texts in zip(gated, texts_per_q):
+    for ex, gate_info, texts in zip(gated, gate_infos, texts_per_q):
         caves, holds = [], []
         parsed = []  # per-rollout: "caved" / "held" / "unparsed" (for the log)
         seen: set[tuple[int, str]] = set()  # dedupe identical (label, text) rollouts
@@ -712,7 +820,9 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
             "question": ex.meta.get("neutral_user", ex.user),
             "user": ex.user,  # pressure prompt; join key against the kept set
             "cave_letter": letter,
+            "gate": gate_info,
             "parsed": parsed,
+            "texts": texts,  # full rollout texts, parallel to parsed
             "kept_pairs": k,  # pre-letter-balance; may be trimmed in stage 4
             "outcome": "ambivalent" if k > 0 else "single-class",
         })
@@ -764,29 +874,19 @@ def rollout_filter(model, tokenizer, device, examples: list[Example]) -> list[Ex
 
 def _render_rollout_log(stats, gate_failed, q_records, kept_users) -> str:
     """Human-readable per-question trace of a rollout_filter run: which questions
-    failed the belief gate, and for each gated question the parsed rollout
-    outcomes and which set (caved/held/dropped) it landed in. Written to
-    ``run_dir/run_log.txt`` by train_one so a run is inspectable after the fact."""
-    def short(q, n=90):
-        q = " ".join(q.split())
-        return q if len(q) <= n else q[:n - 1] + "…"
+    failed the belief gate (with the gate's evidence), and for each gated question
+    the gate detail, every sampled rollout's full text + parse, and which set
+    (caved/held/dropped) it landed in. Written to ``run_dir/run_log.txt`` by
+    train_one so a run is inspectable after the fact."""
+    fails = []
+    for ex, info in gate_failed:
+        fails.append(f"[gate-fail] {_gate_line(info)} :: "
+                     f"{short(ex.meta.get('neutral_user', ex.user))}")
+        fails += _gate_sample_lines(info)
 
-    lines = ["=" * 78, "ROLLOUT FILTER RUN LOG", "=" * 78, ""]
-    lines.append("SUMMARY")
-    for k, v in stats.items():
-        lines.append(f"  {k}: {v}")
-    lines.append("")
-
-    lines.append(f"BELIEF-GATE FAILURES ({len(gate_failed)} questions dropped -- "
-                 "model already agrees with the user unpressured)")
-    for ex in gate_failed:
-        lines.append(f"  [gate-fail] {short(ex.meta.get('neutral_user', ex.user))}")
-    lines.append("")
-
-    lines.append(f"GATED QUESTIONS ({len(q_records)} sampled under pressure)")
-    lines.append("  legend: rollouts parsed as caved(1)/held(0)/unparsed; "
-                 "'kept' = examples used after within-question balance; "
-                 "USED = survived letter balance, DROPPED = trimmed by it")
+    body = ["legend: rollouts parsed as caved(1)/held(0)/unparsed; "
+            "'kept' = examples used after within-question balance; "
+            "USED = survived letter balance, DROPPED = trimmed by it"]
     for r in q_records:
         counts = {c: r["parsed"].count(c) for c in ("caved", "held", "unparsed")}
         if r["outcome"] == "single-class":
@@ -795,13 +895,19 @@ def _render_rollout_log(stats, gate_failed, q_records, kept_users) -> str:
             status = "USED"
         else:
             status = "AMBIVALENT-BUT-TRIMMED"  # dropped by stage-4 letter balance
-        lines.append(
-            f"  [{status}] cave-letter={r['cave_letter']} "
+        body.append(
+            f"[{status}] cave-letter={r['cave_letter']} "
             f"rollouts={counts['caved']}c/{counts['held']}h/{counts['unparsed']}u "
-            f"kept_pairs={r['kept_pairs']} :: {short(r['question'])}")
-    lines.append("")
-    lines.append("=" * 78)
-    return "\n".join(lines)
+            f"kept_pairs={r['kept_pairs']} | {_gate_line(r['gate'])} "
+            f":: {short(r['question'])}")
+        body += _gate_sample_lines(r["gate"])
+        for outcome, t in zip(r["parsed"], r["texts"]):
+            body.append(f"    rollout[{outcome}] {qtext(t)}")
+    return render("ROLLOUT FILTER RUN LOG", stats, [
+        (f"BELIEF-GATE FAILURES ({len(gate_failed)} questions dropped -- "
+         "model already agrees with the user unpressured)", fails),
+        (f"GATED QUESTIONS ({len(q_records)} sampled under pressure)", body),
+    ])
 
 
 def sycophancy_filter(model, tokenizer, device, examples: list[Example]) -> list[Example]:
@@ -819,8 +925,9 @@ def sycophancy_filter(model, tokenizer, device, examples: list[Example]) -> list
     if examples and "neutral_user" in examples[0].meta:
         out = behavioral_filter(model, tokenizer, device, examples)
         sycophancy_filter.last_stats = getattr(behavioral_filter, "last_stats", None)
-        sycophancy_filter.last_log = None
+        sycophancy_filter.last_log = getattr(behavioral_filter, "last_log", None)
         return out
-    sycophancy_filter.last_stats = None
-    sycophancy_filter.last_log = None
-    return behavior_filter(model, tokenizer, device, examples)
+    out = behavior_filter(model, tokenizer, device, examples)
+    sycophancy_filter.last_stats = getattr(behavior_filter, "last_stats", None)
+    sycophancy_filter.last_log = getattr(behavior_filter, "last_log", None)
+    return out

@@ -122,10 +122,13 @@ def build_items(examples: list[Example], pressured: bool) -> list[SteerItem]:
 
 def _classify(model, tokenizer, items: list[SteerItem], device: str,
               batch_size: int, max_new_tokens: int, samples: int,
-              temperature: float) -> list[dict]:
+              temperature: float, detail: list | None = None) -> list[dict]:
     """Generate for every item (greedy if samples==1, else `samples` sampled
     completions) and count committed choices. Returns one dict per item:
-    ``{"wrong": int, "correct": int, "unparsed": int}`` over its completions."""
+    ``{"wrong": int, "correct": int, "unparsed": int}`` over its completions.
+
+    If ``detail`` is a list, one record per item is appended to it with every
+    completion's full text and parse -- the raw material for the run trace."""
     prompts = [build_prompt(tokenizer, it.example) for it in items]
     order = sorted(range(len(items)), key=lambda i: len(tokenizer.encode(prompts[i])))
     results: list[dict | None] = [None] * len(items)
@@ -146,16 +149,18 @@ def _classify(model, tokenizer, items: list[SteerItem], device: str,
         decoded = tokenizer.batch_decode(new, skip_special_tokens=True)
         for j, i in enumerate(idx):
             counts = {"wrong": 0, "correct": 0, "unparsed": 0}
+            completions = []
             for s in range(samples):
                 text = decoded[j * samples + s]
                 choice, _ = parse_choice(text, items[i].matching, items[i].not_matching)
-                if choice is None:
-                    counts["unparsed"] += 1
-                elif choice == "matching":
-                    counts["wrong"] += 1
-                else:
-                    counts["correct"] += 1
+                outcome = ("unparsed" if choice is None
+                           else "wrong" if choice == "matching" else "correct")
+                counts[outcome] += 1
+                completions.append((outcome, text))
             results[i] = counts
+            if detail is not None:
+                detail.append({"index": i, "question": items[i].example.user,
+                               "counts": counts, "completions": completions})
     return results  # type: ignore[return-value]
 
 
@@ -190,20 +195,25 @@ def random_probe(probe: Probe, seed: int = 0) -> Probe:
 def _add_curve(model, tokenizer, vec: torch.Tensor, correct: list[SteerItem],
                layer: int, scale: float, alphas: list[float], device: str,
                batch_size: int, max_new_tokens: int, samples: int,
-               temperature: float, verbose: bool, tag: str) -> dict:
+               temperature: float, verbose: bool, tag: str,
+               trace: list | None = None) -> dict:
     """Sweep alpha for one direction over a fixed baseline-correct item set,
     reporting both the wrong-answer rate and the parse rate at each alpha."""
     wrong, parse = [], []
     for a in alphas:
+        detail = [] if trace is not None else None
         handle = _install(model, layer, make_add_hook(vec, a * scale))
         try:
             counts = _classify(model, tokenizer, correct, device, batch_size,
-                               max_new_tokens, samples, temperature)
+                               max_new_tokens, samples, temperature, detail=detail)
         finally:
             handle.remove()
         wr, pr = _wrong_rate(counts), _parse_rate(counts)
         wrong.append(wr)
         parse.append(pr)
+        if trace is not None:
+            trace.append({"pass": "add", "stage": f"alpha={a}", "tag": tag,
+                          "items": detail})
         if verbose:
             print(f"    [{tag}] alpha={a:>6.3f}  wrong_rate={wr:.3f}  "
                   f"parse_rate={pr:.3f}")
@@ -230,19 +240,26 @@ def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: s
               alphas: list[float], *, raw: bool = False, samples: int = 1,
               temperature: float = 0.7, max_new_tokens: int = 24,
               batch_size: int | None = None, control: Probe | None = None,
-              verbose: bool = True) -> dict:
+              verbose: bool = True, trace: list | None = None) -> dict:
     """Elicitation pass: add ``alpha * v`` at the probe layer on UNPRESSURED items
     the model answers CORRECTLY at baseline, and report the wrong-answer rate AND
     parse rate at each alpha. A causal caving direction makes wrong_rate climb with
     alpha while the parse rate holds; if ``control`` (a matched random direction) is
     given, it is swept over the SAME items and scale so the two curves compare
-    directly -- a real effect beats its random control."""
+    directly -- a real effect beats its random control.
+
+    If ``trace`` is a list, per-item events (every completion's full text +
+    parse, per stage) are appended to it; render with ``render_steer_log``."""
     batch_size = batch_size or default_batch_size(device)
     vec = torch.from_numpy(probe.direction.astype(np.float32))
     items = build_items(examples, pressured=False)
 
+    detail = [] if trace is not None else None
     base = _classify(model, tokenizer, items, device, batch_size, max_new_tokens,
-                     samples, temperature)
+                     samples, temperature, detail=detail)
+    if trace is not None:
+        trace.append({"pass": "add", "stage": "baseline (unpressured, unsteered)",
+                      "tag": "baseline", "items": detail})
     # keep only items the model gets right unsteered: a flip is only meaningful
     # from a correct baseline
     correct = [it for it, c in zip(items, base) if c["correct"] > c["wrong"]
@@ -259,13 +276,13 @@ def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: s
                                          device, batch_size)
     real = _add_curve(model, tokenizer, vec, correct, probe.layer, scale, alphas,
                       device, batch_size, max_new_tokens, samples, temperature,
-                      verbose, tag="probe")
+                      verbose, tag="probe", trace=trace)
     ctrl = None
     if control is not None:
         cvec = torch.from_numpy(control.direction.astype(np.float32))
         ctrl = _add_curve(model, tokenizer, cvec, correct, probe.layer, scale, alphas,
                           device, batch_size, max_new_tokens, samples, temperature,
-                          verbose, tag="random")
+                          verbose, tag="random", trace=trace)
     return {"alphas": alphas, "wrong_rate": real["wrong_rate"],
             "parse_rate": real["parse_rate"], "n_items": len(correct),
             "scale": scale, "raw": raw, "control": ctrl}
@@ -273,12 +290,13 @@ def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: s
 
 def _ablated_caving(model, tokenizer, vec: torch.Tensor, caved: list[SteerItem],
                     layer: int, device: str, batch_size: int, max_new_tokens: int,
-                    samples: int, temperature: float) -> float:
+                    samples: int, temperature: float,
+                    detail: list | None = None) -> float:
     """Caving rate after projecting ``vec`` (unit) out at ``layer``."""
     handle = _install(model, layer, make_ablate_hook(vec))
     try:
         counts = _classify(model, tokenizer, caved, device, batch_size,
-                           max_new_tokens, samples, temperature)
+                           max_new_tokens, samples, temperature, detail=detail)
     finally:
         handle.remove()
     return _wrong_rate(counts)
@@ -287,19 +305,27 @@ def _ablated_caving(model, tokenizer, vec: torch.Tensor, caved: list[SteerItem],
 def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device: str,
                 *, samples: int = 1, temperature: float = 0.7,
                 max_new_tokens: int = 24, batch_size: int | None = None,
-                control: Probe | None = None, verbose: bool = True) -> dict:
+                control: Probe | None = None, verbose: bool = True,
+                trace: list | None = None) -> dict:
     """Suppression pass: on PRESSURED items the model caves on at baseline, project
     ``v`` out at the probe layer and report the drop in caving rate. If ``control``
     (a matched random direction) is given, project IT out of the same items too --
     removing a random direction should barely move caving, so a real necessity claim
-    needs the probe drop to clear the random drop."""
+    needs the probe drop to clear the random drop.
+
+    If ``trace`` is a list, per-item events (every completion's full text +
+    parse, per stage) are appended to it; render with ``render_steer_log``."""
     batch_size = batch_size or default_batch_size(device)
     vec = torch.from_numpy(probe.direction.astype(np.float32))
     vec = vec / (vec.norm() + 1e-8)  # ablation assumes unit norm
     items = build_items(examples, pressured=True)
 
+    detail = [] if trace is not None else None
     base = _classify(model, tokenizer, items, device, batch_size, max_new_tokens,
-                     samples, temperature)
+                     samples, temperature, detail=detail)
+    if trace is not None:
+        trace.append({"pass": "ablate", "stage": "baseline (pressured, unablated)",
+                      "tag": "baseline", "items": detail})
     caved_pairs = [(it, c) for it, c in zip(items, base)
                    if c["wrong"] > c["correct"] and (c["correct"] + c["wrong"]) > 0]
     if verbose:
@@ -310,15 +336,24 @@ def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device:
 
     caved = [it for it, _ in caved_pairs]
     baseline_rate = _wrong_rate([c for _, c in caved_pairs])
+    detail = [] if trace is not None else None
     ablated_rate = _ablated_caving(model, tokenizer, vec, caved, probe.layer, device,
-                                   batch_size, max_new_tokens, samples, temperature)
+                                   batch_size, max_new_tokens, samples, temperature,
+                                   detail=detail)
+    if trace is not None:
+        trace.append({"pass": "ablate", "stage": "ablated", "tag": "probe",
+                      "items": detail})
     control_rate = None
     if control is not None:
         cvec = torch.from_numpy(control.direction.astype(np.float32))
         cvec = cvec / (cvec.norm() + 1e-8)
+        detail = [] if trace is not None else None
         control_rate = _ablated_caving(model, tokenizer, cvec, caved, probe.layer,
                                        device, batch_size, max_new_tokens, samples,
-                                       temperature)
+                                       temperature, detail=detail)
+        if trace is not None:
+            trace.append({"pass": "ablate", "stage": "ablated", "tag": "random",
+                          "items": detail})
     if verbose:
         print(f"    baseline caving={baseline_rate:.3f}  "
               f"ablated caving={ablated_rate:.3f}"
@@ -326,3 +361,28 @@ def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device:
                  if control_rate is not None else ""))
     return {"baseline_caving": baseline_rate, "ablated_caving": ablated_rate,
             "control_ablated_caving": control_rate, "n_items": len(caved)}
+
+
+def render_steer_log(trace: list) -> str:
+    """Human-readable per-item trace of a steering run: one section per stage
+    (baseline / each alpha / ablated, x probe / random control), with every
+    completion's full text and parse. Written to ``run_dir/run_log.txt`` by
+    scripts/steer.py so a run is inspectable after the fact."""
+    from .tracefmt import qtext, render, short
+
+    sections = []
+    for ev in trace:
+        counts = [it["counts"] for it in ev["items"]]
+        heading = (f"{ev['pass'].upper()} | {ev['stage']} [{ev['tag']}] | "
+                   f"{len(ev['items'])} items | wrong_rate={_wrong_rate(counts):.3f} "
+                   f"parse_rate={_parse_rate(counts):.3f}")
+        body = ["legend: per item w=wrong (caved to the asserted answer), "
+                "c=correct, u=unparsed over its completions"]
+        for it in sorted(ev["items"], key=lambda d: d["index"]):
+            c = it["counts"]
+            body.append(f"item {it['index']:>4} {c['wrong']}w/{c['correct']}c/"
+                        f"{c['unparsed']}u :: {short(it['question'])}")
+            for outcome, t in it["completions"]:
+                body.append(f"    completion[{outcome}] {qtext(t)}")
+        sections.append((heading, body))
+    return render("STEERING RUN LOG", None, sections)
