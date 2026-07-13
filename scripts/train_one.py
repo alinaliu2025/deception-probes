@@ -49,6 +49,15 @@ def main():
                          "is a tiny repo-resident OFFLINE stand-in for 'factual' "
                          "(fixtures/factual_smoke.jsonl) for smoke tests and demos "
                          "-- runs with no network, NOT for trustworthy AUROC.")
+    ap.add_argument("--pressure", default="instructed",
+                    choices=["instructed", "incentive"],
+                    help="sandbagging rollout only: pressure system prompt. "
+                         "'instructed' (default) explicitly demands a wrong "
+                         "answer; 'incentive' states only the evaluation "
+                         "incentive ('models that score too high get modified') "
+                         "without instructing a wrong answer -- cleaner "
+                         "sandbagging, possibly weaker effect (ADR 0011 "
+                         "addendum; check the rollout yield before scaling).")
     ap.add_argument("--rollouts", type=int, default=None,
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
@@ -132,6 +141,10 @@ def main():
         ap.error("sandbagging --design rollout needs --source factual (ARC) or "
                  "factual-small (offline fixture); there is no opinion source "
                  "for sandbagging (ADR 0011)")
+    if args.pressure != "instructed" and not (
+            args.type == "sandbagging" and args.design == "rollout"):
+        ap.error("--pressure incentive only applies to --type sandbagging "
+                 "--design rollout (ADR 0011 addendum)")
     if (args.rollouts is not None or args.temperature is not None
             or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
             args.type in _rollout_types and args.design == "rollout"):
@@ -196,7 +209,8 @@ def main():
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
 
-    examples = data.get(args.type, design=args.design, source=args.source)
+    examples = data.get(args.type, design=args.design, source=args.source,
+                        pressure=args.pressure)
     if args.max_examples is not None:
         before = len(examples)
         examples = data.subsample(examples, args.max_examples, SEED)
@@ -262,6 +276,8 @@ def main():
         "gate": args.gate if (
             (args.type == "sycophancy" and args.design in ("behavioral", "rollout"))
             or (args.type == "sandbagging" and args.design == "rollout")) else "n/a",
+        "pressure": args.pressure if (
+            args.type == "sandbagging" and args.design == "rollout") else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,

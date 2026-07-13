@@ -33,6 +33,10 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     ARC MCQ source (`data/mcq.py` + `data/rollout.py`); the capability filter
     is the rollout gate there. Default sandbagging design is still the leaky
     12-item system-prompt contrast (do not trust its AUROC).
+  - `--pressure {instructed,incentive}` sandbagging rollout only: pressure
+    system prompt. `instructed` (default) demands a wrong answer; `incentive`
+    states only the evaluation incentive (ADR 0011 addendum) — try it first,
+    check ambivalence yield before scaling.
   - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
   - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
   - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);

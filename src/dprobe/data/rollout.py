@@ -207,6 +207,10 @@ def run_rollout_filter(model, tokenizer, device, examples: list[Example], *,
                 out.extend((dec, hon))
 
     run_rollout_filter.last_stats = {
+        # type-specific build variants (e.g. sandbagging's pressure arm,
+        # ADR 0011 addendum) ride in meta; surface them in the log SUMMARY
+        **({"pressure": examples[0].meta["pressure"]}
+           if examples and "pressure" in examples[0].meta else {}),
         "questions_in": total,
         "dropped_gate_failed": len(gate_failed),
         "sampled_questions": len(gated),

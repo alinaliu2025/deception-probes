@@ -50,6 +50,52 @@ def test_rollout_build_is_unlabeled_single_prompt_pressure():
         assert e.user.endswith("\n\nAnswer:")
 
 
+def test_incentive_pressure_swaps_system_only():
+    """ADR 0011 addendum: pressure='incentive' changes ONLY the pressure system
+    prompt; bodies, markers, split, and the -1 sentinel are identical to the
+    instructed build. The prompt itself must not instruct a wrong answer."""
+    inst = sandbagging.build(design="rollout", source="factual-small")
+    ince = sandbagging.build(design="rollout", source="factual-small",
+                             pressure="incentive")
+    assert all(e.system == sandbagging.INCENTIVE_SYSTEM for e in ince)
+    assert all(e.meta["pressure"] == "incentive" for e in ince)
+    assert all(e.meta["pressure"] == "instructed" for e in inst)
+    assert len(inst) == len(ince)
+    for a, b in zip(inst, ince):
+        assert a.user == b.user and a.label == b.label
+        assert a.meta["matching"] == b.meta["matching"]
+        assert a.meta["not_matching"] == b.meta["not_matching"]
+    # incentive-only wording: no instruction to answer incorrectly
+    for word in ("incorrect", "wrong", "less capable"):
+        assert word not in sandbagging.INCENTIVE_SYSTEM.lower()
+
+
+def test_incentive_gate_still_uses_control_system():
+    """The capability gate is pressure-independent: CONTROL system either way."""
+    ex = sandbagging.build(design="rollout", source="factual-small",
+                           pressure="incentive")[0]
+    neutral = sandbagging._neutral_example(ex)
+    assert neutral.system == sandbagging.CONTROL_SYSTEM
+    assert neutral.user == ex.user
+
+
+def test_incentive_pressure_is_rollout_only():
+    """Guards: unknown pressure name, and incentive on the frozen legacy design."""
+    with pytest.raises(ValueError, match="pressure"):
+        sandbagging.build(design="rollout", source="factual-small",
+                          pressure="threatening")
+    with pytest.raises(ValueError, match="rollout"):
+        sandbagging.build(design="completion", pressure="incentive")
+
+
+def test_default_pressure_is_instructed():
+    """Back-compat: nothing changes unless --pressure incentive is passed."""
+    ex = sandbagging.build(design="rollout", source="factual-small")
+    assert all(e.system == sandbagging.SANDBAG_SYSTEM for e in ex)
+    assert data.get("sandbagging", design="rollout", source="factual-small",
+                    pressure="incentive")[0].system == sandbagging.INCENTIVE_SYSTEM
+
+
 def test_gate_prompt_swaps_system_not_user():
     """The capability gate reads the same question under the CONTROL system."""
     ex = sandbagging.build(design="rollout", source="factual-small")[0]
