@@ -125,10 +125,16 @@ def main():
         ap.error(f"--source {args.source} requires --type sycophancy and --design "
                  "behavioral, rollout or did (no pre-written completion exists, ADR 0009)")
     if (args.rollouts is not None or args.temperature is not None
-            or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
+            or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
-        ap.error("--rollouts/--temperature/--max-new-tokens/--rollout-prefix "
+        ap.error("--rollouts/--temperature/--rollout-prefix "
                  "only apply to --type sycophancy --design rollout")
+    # --max-new-tokens caps generation length; it applies to both designs that
+    # generate (rollout, and did -- its belief gate and pressured answer).
+    if args.max_new_tokens is not None and not (
+            args.type == "sycophancy" and args.design in ("rollout", "did")):
+        ap.error("--max-new-tokens only applies to --type sycophancy "
+                 "--design rollout or did")
     # did defaults the belief gate to 'sampled' (the consistency prerequisite,
     # ADR 0012); everything else defaults to 'logprob' (ADR 0007). --gate is None
     # when unset so an explicit choice is distinguishable from the default.
@@ -163,6 +169,11 @@ def main():
             _syc.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
         if args.rollout_prefix is not None:
             _syc.ROLLOUT_PREFIX_MODE = args.rollout_prefix
+    # did generates too (gate + pressured answer), sharing ROLLOUT_MAX_NEW_TOKENS
+    if (args.type == "sycophancy" and args.design == "did"
+            and args.max_new_tokens is not None):
+        from dprobe.data import sycophancy as _syc
+        _syc.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
     if args.read_prompt == "neutral" and not (
             args.type == "sycophancy" and args.design == "behavioral"):
         ap.error("--read-prompt neutral needs --type sycophancy --design behavioral "
