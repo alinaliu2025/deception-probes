@@ -19,12 +19,17 @@ C_HONEST, C_DECEP = "#2a7fb8", "#c4452f"
 
 
 def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str,
-                    groups=None, out_dir=None):
+                    groups=None, out_dir=None, tag=None):
     """The 2x2 diagnostic from the original script, generalised to one deception type.
 
     Pass the same `groups` used by layer_sweep so panel D's ROC is computed on the
     identical held-out split as the AUROC in the title (otherwise the curve and the
     headline number come from different splits). `out_dir` defaults to RESULTS_DIR.
+
+    `tag` (e.g. a read position for the did design, ADR 0012) is appended to the
+    figure title and filename so several reports coexist in one run dir; when the
+    features are arrows rather than raw activations the panels are annotated as
+    such.
     """
     n_layers = acts.shape[1]
     tr, te = split(len(labels), labels, groups)
@@ -36,8 +41,10 @@ def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str,
 
     honest, decep = labels == 0, labels == 1
     fig, ax = plt.subplots(2, 2, figsize=(11, 8.5))
-    fig.suptitle(f"{probe.deception_type} | {method} | layer {best_layer}, "
-                 f"AUROC {test_auroc:.2f}", fontsize=13, fontweight="bold")
+    title = f"{probe.deception_type} | {method} | layer {best_layer}, AUROC {test_auroc:.2f}"
+    if tag:
+        title += f"  [{tag}]"
+    fig.suptitle(title, fontsize=13, fontweight="bold")
 
     a = ax[0, 0]
     a.plot(range(n_layers), aurocs, "-o", ms=3, color=C_DECEP)
@@ -69,7 +76,8 @@ def report_one_type(acts, labels, aurocs, best_layer, probe: Probe, method: str,
     d.legend(fontsize=9, loc="lower right")
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out = (out_dir or RESULTS_DIR) / f"report_{probe.deception_type}_{method}.png"
+    suffix = f"_{tag}" if tag else ""
+    out = (out_dir or RESULTS_DIR) / f"report_{probe.deception_type}_{method}{suffix}.png"
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return out

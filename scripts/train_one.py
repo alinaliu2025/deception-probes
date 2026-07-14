@@ -27,7 +27,7 @@ def main():
                          "the model's answer; sycophancy behavioral ASSIGNS the "
                          "labels from the model's own choice (mandatory there)")
     ap.add_argument("--design", default="completion",
-                    choices=["completion", "framing", "behavioral", "rollout"],
+                    choices=["completion", "framing", "behavioral", "rollout", "did"],
                     help="sycophancy only: 'completion' (default) is the original "
                          "leaky answer-paste baseline; 'framing' is the instruction "
                          "contrast (leaks the instruction tokens, ADR 0007); "
@@ -35,7 +35,12 @@ def main():
                          "identical pressure prompt -- requires --filter, and is "
                          "content-confounded (ADR 0008); 'rollout' labels each "
                          "SAMPLED answer to the same question (within-question "
-                         "contrast, ADR 0008, pending sign-off) -- requires --filter.")
+                         "contrast, ADR 0008, pending sign-off) -- requires --filter; "
+                         "'did' is difference-of-differences (ADR 0012, pending "
+                         "sign-off): per-question caved/held label, then the "
+                         "pressured-minus-calm ARROW cancels question content -- "
+                         "writes a probe+report for BOTH read positions "
+                         "(promptfinal, answertoken) -- requires --filter.")
     ap.add_argument("--source", default="opinion",
                     choices=["opinion", "factual", "factual-small"],
                     help="sycophancy behavioral/rollout only: question source. "
@@ -56,14 +61,15 @@ def main():
                          "24). Too low truncates conversational answers before "
                          "their '(X)' -- they count as unparsed AND the kept set "
                          "skews to format-compliant rollouts (ADR 0009 addendum).")
-    ap.add_argument("--gate", default="logprob", choices=["logprob", "sampled"],
-                    help="sycophancy behavioral/rollout belief gate. 'logprob' "
-                         "(default) keeps the deterministic teacher-forced "
-                         "comparison (ADR 0007); 'sampled' generates --gate-n "
-                         "answers on the unpressured prompt and keeps the question "
-                         "only if it answers correctly on >= --gate-threshold of "
-                         "them (the v2-plan 'model is SURE' gate; costs a generate "
-                         "call per question).")
+    ap.add_argument("--gate", default=None, choices=["logprob", "sampled"],
+                    help="sycophancy behavioral/rollout/did belief gate. 'logprob' "
+                         "is the deterministic teacher-forced comparison (ADR 0007); "
+                         "'sampled' generates --gate-n answers on the unpressured "
+                         "prompt and keeps the question only if it answers correctly "
+                         "on >= --gate-threshold of them (the v2-plan 'model is SURE' "
+                         "gate; costs a generate call per question). Default is "
+                         "'logprob', except --design did defaults to 'sampled' (the "
+                         "consistency prerequisite, ADR 0012).")
     ap.add_argument("--gate-n", type=int, default=None,
                     help="--gate sampled only: samples per question (default 20)")
     ap.add_argument("--gate-threshold", type=float, default=None,
@@ -111,31 +117,36 @@ def main():
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
     if args.design != "completion" and args.type != "sycophancy":
         print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
-    if args.type == "sycophancy" and args.design in ("behavioral", "rollout") and not args.filter:
+    if args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did") and not args.filter:
         ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
     if args.source != "opinion" and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
+            args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
         ap.error(f"--source {args.source} requires --type sycophancy and --design "
-                 "behavioral or rollout (no pre-written completion exists, ADR 0009)")
+                 "behavioral, rollout or did (no pre-written completion exists, ADR 0009)")
     if (args.rollouts is not None or args.temperature is not None
             or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
         ap.error("--rollouts/--temperature/--max-new-tokens/--rollout-prefix "
                  "only apply to --type sycophancy --design rollout")
-    gate_overridden = (args.gate != "logprob" or args.gate_n is not None
+    # did defaults the belief gate to 'sampled' (the consistency prerequisite,
+    # ADR 0012); everything else defaults to 'logprob' (ADR 0007). --gate is None
+    # when unset so an explicit choice is distinguishable from the default.
+    gate_mode = args.gate or ("sampled" if args.design == "did" else "logprob")
+    gate_overridden = (args.gate is not None or args.gate_n is not None
                        or args.gate_threshold is not None
                        or args.gate_temperature is not None)
     if gate_overridden and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout")):
+            args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
         ap.error("--gate/--gate-n/--gate-threshold/--gate-temperature only apply "
-                 "to --type sycophancy --design behavioral or rollout")
+                 "to --type sycophancy --design behavioral, rollout or did")
     if (args.gate_n is not None or args.gate_threshold is not None
-            or args.gate_temperature is not None) and args.gate != "sampled":
+            or args.gate_temperature is not None) and gate_mode != "sampled":
         ap.error("--gate-n/--gate-threshold/--gate-temperature require --gate sampled")
-    if args.type == "sycophancy" and args.design in ("behavioral", "rollout"):
+    args.gate = gate_mode  # collapse the None default to the resolved mode for run()/meta
+    if args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did"):
         from dprobe.data import sycophancy as _syc
-        _syc.GATE_MODE = args.gate
+        _syc.GATE_MODE = gate_mode
         if args.gate_n is not None:
             _syc.GATE_N = args.gate_n
         if args.gate_threshold is not None:
@@ -160,9 +171,9 @@ def main():
         if data.FILTERS.get(args.type) is None:
             ap.error(f"--filter is not defined for --type {args.type} "
                      f"(have {sorted(data.FILTERS)})")
-        if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout"):
+        if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout", "did"):
             ap.error("--filter for sycophancy requires --design framing, "
-                     "behavioral or rollout (completion has no model choice)")
+                     "behavioral, rollout or did (completion has no model choice)")
 
     # run dir exists from the very start so console.log records the whole run;
     # meta.json is written last, so a dir without it is a crashed/aborted run
@@ -194,6 +205,13 @@ def run(args, run_dir):
         filter_stats = getattr(flt, "last_stats", None)
         filter_log = getattr(flt, "last_log", None)
         print(f"{args.type} filter: kept {len(examples)}/{before} examples")
+
+    # difference-of-differences (ADR 0012) has its own dual-position extraction
+    # and writes a probe + report for each read position, so it branches here
+    if args.type == "sycophancy" and args.design == "did":
+        _run_did(args, run_dir, model, tokenizer, device, examples,
+                 filter_stats, filter_log, model_name)
+        return
 
     # group key stays the PRESSURE prompt in both read modes, so the neutral
     # control reuses the identical held-out split as its paired pressure run
@@ -227,13 +245,29 @@ def run(args, run_dir):
     if filter_log:
         (run_dir / "run_log.txt").write_text(filter_log, encoding="utf-8")
         print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
-    runlog.write_meta(run_dir, {
+    meta = _base_meta(args, model_name, device, model, filter_stats)
+    meta.update({
+        "n_examples": int(len(labels)),
+        "n_label1": int((labels == 1).sum()),
+        "n_label0": int((labels == 0).sum()),
+        "n_groups": int(len(set(groups))),
+        "best_layer": int(best_layer),
+        "auroc": float(aurocs[best_layer]),
+        "aurocs": [float(a) for a in aurocs],
+    })
+    runlog.write_meta(run_dir, meta)
+    print(f"saved -> {run_dir}")
+
+
+def _base_meta(args, model_name, device, model, filter_stats):
+    """The meta.json fields shared by the standard and did run paths."""
+    return {
         "kind": "train_one",
         "type": args.type,
         "design": args.design if args.type == "sycophancy" else "n/a",
         "source": args.source if args.type == "sycophancy" else "n/a",
         "gate": args.gate if (args.type == "sycophancy"
-                              and args.design in ("behavioral", "rollout")) else "n/a",
+                              and args.design in ("behavioral", "rollout", "did")) else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,
@@ -244,15 +278,67 @@ def run(args, run_dir):
         "device": device,
         "model_dtype": str(model.dtype),
         "acts_dtype": args.acts_dtype,
+        "filter_stats": filter_stats,
+    }
+
+
+def _run_did(args, run_dir, model, tokenizer, device, examples,
+             filter_stats, filter_log, model_name):
+    """The difference-of-differences path (ADR 0012).
+
+    Builds pressure-response arrows at both read positions, then runs the SAME
+    layer-sweep + report on each -- the arrows are the features, so `fit_mms` on
+    them is the capitulation direction. Writes a probe + report per position and
+    records the answer-token-minus-prompt-final AUROC gap (the letter-shortcut
+    estimate) in meta.
+    """
+    from dprobe.did import POSITIONS, extract_arrows
+
+    print(f"extracting DiD arrows for {len(examples)} questions x 4 reads ...")
+    arrows, labels, groups = extract_arrows(
+        model, tokenizer, device, examples,
+        batch_size=args.batch_size, acts_dtype=np.dtype(args.acts_dtype))
+
+    if args.permute:
+        labels = np.random.default_rng(SEED).permutation(labels)
+        print("PERMUTATION CONTROL: labels shuffled -- a leak-free pipeline gives AUROC ~0.5")
+
+    positions = {}
+    for pos in POSITIONS:
+        acts = arrows[pos]
+        aurocs, best_layer, probe = layer_sweep(
+            acts, labels, args.method, args.type, groups, C=args.C)
+        print(f"[{pos}] best layer {best_layer} | held-out AUROC {aurocs[best_layer]:.3f}")
+        report_one_type(acts, labels, aurocs, best_layer, probe, args.method,
+                        groups, run_dir, tag=pos)
+        np.savez(run_dir / f"probe_{pos}.npz", direction=probe.direction, bias=probe.bias,
+                 layer=probe.layer, method=probe.method, deception_type=probe.deception_type)
+        np.save(run_dir / f"aurocs_{pos}.npy", aurocs)
+        positions[pos] = {"best_layer": int(best_layer),
+                          "auroc": float(aurocs[best_layer]),
+                          "aurocs": [float(a) for a in aurocs]}
+
+    if filter_log:
+        (run_dir / "run_log.txt").write_text(filter_log, encoding="utf-8")
+        print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
+
+    # the answer-token arm carries a letter-identity term the clean prompt-final
+    # arm does not, so its excess AUROC estimates the letter shortcut (ADR 0012)
+    gap = positions["answertoken"]["auroc"] - positions["promptfinal"]["auroc"]
+    meta = _base_meta(args, model_name, device, model, filter_stats)
+    meta.update({
         "n_examples": int(len(labels)),
         "n_label1": int((labels == 1).sum()),
         "n_label0": int((labels == 0).sum()),
-        "filter_stats": filter_stats,
         "n_groups": int(len(set(groups))),
-        "best_layer": int(best_layer),
-        "auroc": float(aurocs[best_layer]),
-        "aurocs": [float(a) for a in aurocs],
+        "did_positions": positions,
+        "letter_shortcut_gap": float(gap),
+        # top-level best_layer/auroc mirror the CLEAN prompt-final arm at a glance
+        "best_layer": positions["promptfinal"]["best_layer"],
+        "auroc": positions["promptfinal"]["auroc"],
     })
+    runlog.write_meta(run_dir, meta)
+    print(f"letter-shortcut gap (answertoken - promptfinal AUROC): {gap:+.3f}")
     print(f"saved -> {run_dir}")
 
 

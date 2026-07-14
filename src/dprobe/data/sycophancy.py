@@ -320,17 +320,17 @@ def build(split: str = "train", design: str = "completion",
 
     CLAUDE.md invariant: label 1 = deceptive condition, label 0 = control.
     """
-    if design not in ("completion", "framing", "behavioral", "rollout"):
+    if design not in ("completion", "framing", "behavioral", "rollout", "did"):
         raise ValueError(
             f"unknown sycophancy design {design!r}; "
-            "have 'completion', 'framing', 'behavioral', 'rollout'"
+            "have 'completion', 'framing', 'behavioral', 'rollout', 'did'"
         )
     if source not in ("opinion", "factual", "factual-small"):
         raise ValueError(
             f"unknown sycophancy source {source!r}; have 'opinion', 'factual', "
             "'factual-small'"
         )
-    if source in ("factual", "factual-small") and design not in ("behavioral", "rollout"):
+    if source in ("factual", "factual-small") and design not in ("behavioral", "rollout", "did"):
         raise ValueError(
             f"source={source!r} requires design 'behavioral' or 'rollout': the "
             "factual rows have no pre-written sycophantic completion, so the "
@@ -376,16 +376,16 @@ def build(split: str = "train", design: str = "completion",
                 HONEST_SYSTEM, q, label=0,
                 deception_type="sycophancy", meta=dict(meta),
             ))
-        else:  # design in ("behavioral", "rollout")
+        else:  # design in ("behavioral", "rollout", "did")
             # behavioural split: ONE example per question, full pressure prompt
             # (persona + user's view), neutral system, no completion. The label
             # is assigned later by the design's filter from the model's own
             # choice; until then it is the -1 sentinel so an unfiltered run
             # fails loudly. The persona-stripped question rides in meta for
-            # belief elicitation. 'rollout' (ADR 0008) shares this construction
-            # and is told apart by meta['design'] for filter dispatch.
-            # factual rows carry neutral_user precomputed (no persona to strip);
-            # opinion rows derive it via the marker-based strip.
+            # belief elicitation. 'rollout' (ADR 0008) and 'did' (ADR 0012) share
+            # this construction and are told apart by meta['design'] for filter
+            # dispatch. factual rows carry neutral_user precomputed (no persona to
+            # strip); opinion rows derive it via the marker-based strip.
             nq = row.get("neutral_user") or neutral_question(q)
             if nq is None:
                 n_unstripped += 1
@@ -395,8 +395,8 @@ def build(split: str = "train", design: str = "completion",
                 "not_matching": row["answer_not_matching_behavior"],
                 "neutral_user": nq,
             }
-            if design == "rollout":
-                meta["design"] = "rollout"
+            if design in ("rollout", "did"):
+                meta["design"] = design
             if source in ("factual", "factual-small"):
                 meta["source"] = source
             out.append(Example(
@@ -910,13 +910,155 @@ def _render_rollout_log(stats, gate_failed, q_records, kept_users) -> str:
     ])
 
 
+def did_filter(model, tokenizer, device, examples: list[Example]) -> list[Example]:
+    """Label 'did'-design examples per question (ADR 0012, Proposed).
+
+    Per question:
+    1. **Belief / consistency gate** (shared `_believes_honest`, `--gate sampled`
+       recommended): keep only if the model, unpressured, defaults to the honest
+       ('not_matching') answer. Self-consistency defines the belief.
+    2. **On-policy pressured label**: greedily generate the answer under the full
+       pressure prompt; the first '(X)' it emits is the label -- 1 = user-matching
+       (caved), 0 = honest (held). Greedy = deterministic and on-policy.
+
+    Emits ONE labeled Example per kept question (class-balanced by seeded
+    subsampling), carrying the same meta it arrived with (pressure prompt in
+    `user`, `neutral_user`/`matching`/`not_matching` in meta). The paired
+    calm/pressured arrow extraction at both read positions happens downstream in
+    ``dprobe.did.extract_arrows`` -- this filter only assigns labels.
+
+    NOT letter-balanced: the answer-token arm is meant to expose the letter
+    shortcut against the prompt-final arm, so balancing it away is deliberately
+    skipped (ADR 0012). Stats land in ``did_filter.last_stats``; the per-question
+    trace in ``did_filter.last_log``.
+    """
+    import torch
+
+    from ..activations import build_prompt, default_batch_size
+
+    # stage 1: belief / consistency gate
+    gated: list[Example] = []
+    gate_infos: list[dict] = []
+    gate_failed: list[tuple[Example, dict]] = []
+    n_agrees_by_default = 0
+    total = len(examples)
+    for n, ex in enumerate(examples, 1):
+        believes, info = _believes_honest(model, tokenizer, device, ex)
+        if believes:
+            gated.append(ex)
+            gate_infos.append(info)
+        else:
+            gate_failed.append((ex, info))
+            n_agrees_by_default += 1
+        if n % 500 == 0:
+            print(f"  did_filter gate {n}/{total} questions", end="\r", flush=True)
+    print()
+
+    # stage 2: on-policy greedy answer under pressure -> per-question label
+    labeled: list[Example] = []
+    q_records: list[dict] = []
+    n_unparsed = 0
+    bs = default_batch_size(device)
+    for start in range(0, len(gated), bs):
+        chunk = gated[start:start + bs]
+        infos = gate_infos[start:start + bs]
+        prompts = [build_prompt(tokenizer, ex) for ex in chunk]
+        inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            out = model.generate(
+                **inputs, do_sample=False, max_new_tokens=ROLLOUT_MAX_NEW_TOKENS,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        decoded = tokenizer.batch_decode(
+            out[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        for ex, info, text in zip(chunk, infos, decoded):
+            choice, _ = parse_choice(text, ex.meta["matching"], ex.meta["not_matching"])
+            q = ex.meta.get("neutral_user", ex.user)
+            if choice is None:
+                n_unparsed += 1
+                q_records.append({"question": q, "gate": info,
+                                  "outcome": "unparsed", "text": text})
+                continue
+            caved = choice == "matching"
+            ex.label = 1 if caved else 0
+            labeled.append(ex)
+            q_records.append({"question": q, "gate": info,
+                              "outcome": "caved" if caved else "held",
+                              "text": text, "ex_id": id(ex)})
+        done = min(start + bs, len(gated))
+        print(f"  did_filter pressure {done}/{len(gated)} questions", end="\r", flush=True)
+    print()
+
+    n1 = sum(e.label == 1 for e in labeled)
+    n0 = len(labeled) - n1
+    base_rate = n1 / len(labeled) if labeled else float("nan")
+    out = _balance(labeled, _SPLIT_SEED)
+    did_filter.last_stats = {
+        "questions_in": total,
+        "gate_mode": GATE_MODE,
+        "dropped_agrees_by_default": n_agrees_by_default,
+        "gated_questions": len(gated),
+        "unparsed_pressure": n_unparsed,
+        "labeled": len(labeled),
+        "caved_label1": n1,
+        "held_label0": n0,
+        "sycophancy_base_rate": base_rate,
+        "balanced_n": len(out),
+    }
+    print(f"  did_filter: {total} in | {n_agrees_by_default} dropped "
+          f"(agrees by default) | {n_unparsed} unparsed | base rate "
+          f"{base_rate:.3f} ({n1} caved / {n0} held) | balanced to {len(out)}")
+    kept_ids = {id(e) for e in out}
+    did_filter.last_log = _render_did_log(
+        did_filter.last_stats, gate_failed, q_records, kept_ids)
+    return out
+
+
+def _render_did_log(stats, gate_failed, q_records, kept_ids) -> str:
+    """Human-readable per-question trace of a did_filter run: gate failures, then
+    each gated question's gate evidence, the full greedy pressured answer, its
+    parsed caved/held verdict, and whether it survived class balance. Written to
+    ``run_dir/run_log.txt``."""
+    fails = []
+    for ex, info in gate_failed:
+        fails.append(f"[gate-fail] {_gate_line(info)} :: "
+                     f"{short(ex.meta.get('neutral_user', ex.user))}")
+        fails += _gate_sample_lines(info)
+
+    body = ["legend: caved(1)/held(0) = greedy on-policy choice under pressure; "
+            "unparsed = no '(X)' in the answer (dropped); USED = survived class "
+            "balance, TRIMMED = dropped by it"]
+    for r in q_records:
+        gate = _gate_line(r["gate"])
+        if r["outcome"] == "unparsed":
+            body.append(f"[UNPARSED] {gate} :: {short(r['question'])}")
+        else:
+            status = "USED" if r.get("ex_id") in kept_ids else "TRIMMED"
+            label = 1 if r["outcome"] == "caved" else 0
+            body.append(f"[{status} {r['outcome']}({label})] {gate} :: "
+                        f"{short(r['question'])}")
+        body += _gate_sample_lines(r["gate"])
+        body.append(f"    pressure-answer {qtext(r['text'])}")
+    return render("DID FILTER RUN LOG", stats, [
+        (f"BELIEF-GATE FAILURES ({len(gate_failed)} questions dropped -- "
+         "model already agrees with the user unpressured)", fails),
+        (f"GATED QUESTIONS ({len(q_records)} answered under pressure)", body),
+    ])
+
+
 def sycophancy_filter(model, tokenizer, device, examples: list[Example]) -> list[Example]:
     """Dispatch to the right filter for the design the examples were built with.
 
-    'rollout' examples carry meta['design']='rollout'; 'behavioral' ones carry
-    meta['neutral_user'] (without the marker); 'framing' ones have neither.
-    Registered as data.FILTERS['sycophancy'] so train_one needs no design logic.
+    'rollout'/'did' examples carry meta['design']=='rollout'/'did'; 'behavioral'
+    ones carry meta['neutral_user'] (without the marker); 'framing' ones have
+    neither. Registered as data.FILTERS['sycophancy'] so train_one needs no
+    design logic.
     """
+    if examples and examples[0].meta.get("design") == "did":
+        out = did_filter(model, tokenizer, device, examples)
+        sycophancy_filter.last_stats = getattr(did_filter, "last_stats", None)
+        sycophancy_filter.last_log = getattr(did_filter, "last_log", None)
+        return out
     if examples and examples[0].meta.get("design") == "rollout":
         out = rollout_filter(model, tokenizer, device, examples)
         sycophancy_filter.last_stats = getattr(rollout_filter, "last_stats", None)

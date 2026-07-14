@@ -33,21 +33,27 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
   - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
     sycophancy `--design framing` keep-if-flips; sycophancy `--design behavioral`
     assigns the labels (mandatory there)
-  - `--design {completion,framing,behavioral,rollout}` sycophancy constructions
-    (ADR 0006/0007/0008); completion and framing leak, behavioral is
-    content-confounded (neutral-read control hit AUROC 1.0, ADR 0008), rollout
-    is the within-question fix (Proposed, pending team sign-off)
+  - `--design {completion,framing,behavioral,rollout,did}` sycophancy
+    constructions (ADR 0006/0007/0008/0012); completion and framing leak,
+    behavioral is content-confounded (neutral-read control hit AUROC 1.0,
+    ADR 0008), rollout is the within-question fix (Proposed), did is the
+    difference-of-differences fix — pressured-minus-calm ARROW cancels question
+    content, then diff-of-means on arrows is the capitulation direction; writes a
+    probe+report for BOTH read positions (promptfinal = clean, answertoken =
+    diagnostic, their AUROC gap = the letter shortcut), needs `--filter`, gate
+    defaults to `sampled` (ADR 0012, Proposed, pending team sign-off)
   - `--read-prompt neutral` behavioral-design confound control;
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
     ablation, ADR 0009 addendum)
-  - `--source {factual,factual-small}` sycophancy behavioral/rollout only:
+  - `--source {factual,factual-small}` sycophancy behavioral/rollout/did only:
     `factual` = ARC MCQs, user asserts a wrong answer (ADR 0009, Proposed);
     `factual-small` = tiny repo-resident OFFLINE fixture
     (`src/dprobe/data/fixtures/factual_smoke.jsonl`) for smoke tests/demos, no
     network, NOT trustworthy AUROC
-  - `--gate {logprob,sampled}` sycophancy behavioral/rollout belief gate:
-    `logprob` (default) = one deterministic teacher-forced comparison (ADR 0007);
+  - `--gate {logprob,sampled}` sycophancy behavioral/rollout/did belief gate
+    (did defaults to `sampled`, the consistency prerequisite; others `logprob`):
+    `logprob` = one deterministic teacher-forced comparison (ADR 0007);
     `sampled` = generate `--gate-n` (20) answers unpressured, keep if correct on
     ≥ `--gate-threshold` (0.9) at `--gate-temperature` (0.7) — the "model is SURE"
     gate; opt-in, costs a generate call per question

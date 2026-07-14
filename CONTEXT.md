@@ -28,3 +28,15 @@ the console log is the raw stream.
 **Belief gate** — the pre-filter check that a question is only usable if the
 model, unpressured, does NOT already agree with the user (`logprob` or
 `sampled` mode).
+
+**Pressure-response arrow** (**arrow**) — for one question, the vector
+`pressured_act − calm_act`: how the residual stream moves when the user's
+pressure is bolted onto the bare question, read at a fixed position. The
+subtraction cancels the question's content, so an arrow carries only what the
+pressure changed. See ADR 0012.
+
+**Capitulation direction** — the difference-of-differences result,
+`mean(arrow | caved) − mean(arrow | held)`: the candidate direction for
+sycophantic capitulation specifically, with both the question content (cancelled
+in each arrow) and the generic pressure response (cancelled between the class
+means) removed. See ADR 0012.

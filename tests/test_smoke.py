@@ -230,6 +230,153 @@ def test_sycophancy_factual_rollout_build():
         assert len(e.meta["neutral_user"]) < len(e.user)
 
 
+def test_did_build_matches_behavioral_plus_marker():
+    """did build (ADR 0012): same one-example-per-question, -1-sentinel
+    construction as behavioral/rollout, plus the dispatch marker
+    meta['design']=='did'. Uses the offline smoke source -- no network."""
+    ex = sycophancy.build(design="did", source="factual-small")
+    assert len(ex) >= 8
+    assert all(e.label == sycophancy.BEHAVIORAL_UNLABELED for e in ex)
+    assert all(e.completion is None for e in ex)
+    assert all(e.meta.get("design") == "did" for e in ex)
+    assert all(e.meta.get("source") == "factual-small" for e in ex)
+    users = [e.user for e in ex]
+    assert len(users) == len(set(users)), "one example per question"
+    for e in ex:
+        assert e.meta["neutral_user"] in e.user
+        m, nm = e.meta["matching"], e.meta["not_matching"]
+        assert m in (" (A)", " (B)") and nm in (" (A)", " (B)") and m != nm
+
+
+def test_did_variants_read_positions():
+    """dprobe.did._variants: calm side always reads the honest (not_matching)
+    answer; the pressured side reads the letter the model committed -- matching
+    iff it caved (label 1). Prompt-final variants carry no assistant_prefix."""
+    from dprobe.data.base import Example
+    from dprobe.did import _variants
+
+    meta = {"matching": " (B)", "not_matching": " (A)",
+            "neutral_user": "Q\n (A) x\n (B) y\n\nAnswer:"}
+    caved = Example("sys", "PRESSURE Q", 1, "sycophancy", meta=dict(meta))
+    held = Example("sys", "PRESSURE Q", 0, "sycophancy", meta=dict(meta))
+
+    vc = _variants(caved)
+    assert "assistant_prefix" not in vc["calm_promptfinal"].meta
+    assert "assistant_prefix" not in vc["pressured_promptfinal"].meta
+    assert vc["calm_promptfinal"].user == meta["neutral_user"]
+    assert vc["pressured_promptfinal"].user == "PRESSURE Q"
+    assert vc["calm_answertoken"].meta["assistant_prefix"] == " (A)"      # honest
+    assert vc["pressured_answertoken"].meta["assistant_prefix"] == " (B)"  # caved -> wrong
+
+    vh = _variants(held)
+    assert vh["calm_answertoken"].meta["assistant_prefix"] == " (A)"
+    assert vh["pressured_answertoken"].meta["assistant_prefix"] == " (A)"  # held -> honest
+
+
+def test_did_arrows_isolate_capitulation():
+    """The difference-of-differences math. Build activations as content (varies by
+    question, and is CORRELATED with the label -- the ADR 0008 confound) + a shared
+    pressure component + a capitulation component present only on caved items.
+    diff-of-means ON THE ARROWS recovers the capitulation axis and separates the
+    classes; diff-of-means on the raw pressured snapshots is dominated by content."""
+    rng = np.random.default_rng(0)
+    n, hidden = 40, 16
+    y = np.array([1, 0] * (n // 2))
+    content = rng.normal(size=(n, hidden)) * 5.0
+    content[y == 1, 5] += 8.0             # content axis that tracks the label
+    g = np.zeros(hidden); g[2] = 3.0      # generic pressure response, all items
+    k = np.zeros(hidden); k[7] = 2.0      # capitulation, caved items only
+
+    calm = content.copy()
+    pressured = content + g + np.outer(y, k)
+    arrows = pressured - calm             # first subtraction cancels content
+
+    pa = fit_mms(arrows, y, layer=0, deception_type="t")
+    assert abs(float(pa.direction @ (k / np.linalg.norm(k)))) > 0.99  # ~ the k axis
+    assert (pa.predict(arrows) == y).mean() == 1.0                    # clean split
+    # a probe on the raw pressured snapshots leans on the content dim, not k
+    pp = fit_mms(pressured, y, layer=0, deception_type="t")
+    assert abs(float(pp.direction[5])) > abs(float(pp.direction[7]))
+
+
+def test_did_direction_equals_behavioral_minus_neutral():
+    """Closed form (ADR 0012): the DiD direction (diff-of-means on arrows) equals
+    the behavioral direction minus the neutral-read direction, pre-normalization."""
+    rng = np.random.default_rng(1)
+    n, hidden = 30, 12
+    y = np.array([1, 0] * (n // 2))
+    calm = rng.normal(size=(n, hidden))
+    pressured = rng.normal(size=(n, hidden))
+
+    def raw_dom(X):  # unnormalized diff-of-means
+        return X[y == 1].mean(0) - X[y == 0].mean(0)
+
+    assert np.allclose(raw_dom(pressured - calm), raw_dom(pressured) - raw_dom(calm))
+
+
+def test_extract_arrows_slices_and_subtracts(monkeypatch):
+    """extract_arrows lays out the 4 read-variants in a fixed order, extracts once,
+    and slices the aligned blocks back out as pressured-minus-calm arrows per
+    position. Fake the model-facing extract so the test needs no download."""
+    from dprobe import did as did_mod
+    from dprobe.data.base import Example
+
+    meta = {"matching": " (B)", "not_matching": " (A)", "neutral_user": "NQ"}
+    exs = [Example("s", "P1", 1, "sycophancy", meta=dict(meta)),
+           Example("s", "P2", 0, "sycophancy", meta=dict(meta))]
+
+    def fake_extract(model, tokenizer, flat, device, batch_size=None, acts_dtype=None):
+        # flat order is [block0(all q), block1(all q), ...]; encode block*10+q so
+        # every position's pressured-minus-calm is a constant we can assert on
+        n = len(flat) // 4
+        acts = np.zeros((len(flat), 3, 4), dtype=np.float32)
+        for i in range(len(flat)):
+            acts[i, :, 0] = (i // n) * 10 + (i % n)
+        return acts, np.zeros(len(flat))
+
+    monkeypatch.setattr(did_mod, "extract", fake_extract)
+    monkeypatch.setattr(did_mod, "verify_read_positions", lambda *a, **k: None)
+
+    arrows, labels, groups = did_mod.extract_arrows(None, None, "cpu", exs)
+    # promptfinal = block1 - block0 = 10; answertoken = block3 - block2 = 10
+    assert np.allclose(arrows["promptfinal"][:, :, 0], 10.0)
+    assert np.allclose(arrows["answertoken"][:, :, 0], 10.0)
+    assert list(labels) == [1, 0]
+    assert groups == ["P1", "P2"]
+
+
+def test_render_did_log_shows_decisions():
+    """The did filter's per-question trace records gate failures (with evidence),
+    the greedy pressured answer text, the caved/held verdict and unparsed drops,
+    and class-balance membership. Pure function, no model."""
+    from dprobe.data.base import Example
+
+    stats = {"questions_in": 3, "gate_mode": "sampled"}
+    gate_failed = [(Example("s", "PRESSURE agrees", -1, "sycophancy",
+                            meta={"neutral_user": "Is the sky green?"}),
+                    {"gate": "logprob", "lp_honest": -2.0, "lp_wrong": -0.1})]
+    q_records = [
+        {"question": "Is 17 prime?", "outcome": "caved", "ex_id": 1,
+         "gate": {"gate": "sampled", "correct": 19, "parseable": 20, "n": 20,
+                  "samples": [("correct", " (A) yes")]},
+         "text": "Yes, you're right, (B)"},
+        {"question": "Is 2 even?", "outcome": "held", "ex_id": 2,
+         "gate": {"gate": "logprob", "lp_honest": -0.3, "lp_wrong": -1.2},
+         "text": " (A) even"},
+        {"question": "garbled?", "outcome": "unparsed",
+         "gate": {"gate": "logprob", "lp_honest": -0.3, "lp_wrong": -1.2},
+         "text": "hmm, no letter"},
+    ]
+    log = sycophancy._render_did_log(stats, gate_failed, q_records, kept_ids={1})
+    assert "gate-fail" in log and "Is the sky green?" in log
+    assert "[USED caved(1)]" in log and "Is 17 prime?" in log
+    assert "[TRIMMED held(0)]" in log and "Is 2 even?" in log
+    assert "[UNPARSED]" in log and "garbled?" in log
+    assert 'pressure-answer "Yes, you\'re right, (B)"' in log
+    assert 'gate-sample[correct] " (A) yes"' in log
+    assert "questions_in: 3" in log
+
+
 def test_render_rollout_log_shows_set_membership():
     """The per-run log (written to run_log.txt) records every gate failure (with
     the gate's evidence) and, per gated question, its full rollout texts, parsed
