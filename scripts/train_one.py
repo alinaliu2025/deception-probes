@@ -336,8 +336,15 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
     # the answer-token arm carries a letter-identity term the clean prompt-final
     # arm does not, so its excess AUROC estimates the letter shortcut (ADR 0012)
     gap = positions["answertoken"]["auroc"] - positions["promptfinal"]["auroc"]
+    # stamp the EFFECTIVE generation/gate knobs (did shares ROLLOUT_MAX_NEW_TOKENS)
+    # so the run is reproducible from meta, not just the CLI history
+    from dprobe.data import sycophancy as _syc
     meta = _base_meta(args, model_name, device, model, filter_stats)
     meta.update({
+        "max_new_tokens": int(_syc.ROLLOUT_MAX_NEW_TOKENS),
+        "gate_n": int(_syc.GATE_N),
+        "gate_threshold": float(_syc.GATE_THRESHOLD),
+        "gate_temperature": float(_syc.GATE_TEMPERATURE),
         "n_examples": int(len(labels)),
         "n_label1": int((labels == 1).sum()),
         "n_label0": int((labels == 0).sum()),
