@@ -96,7 +96,7 @@ def build_prompt(tokenizer, ex: Example) -> str:
 
 
 def verify_read_positions(tokenizer, examples: list[Example], n: int = 3,
-                          verbose: bool = True) -> None:
+                          verbose: bool = True, read_offset: int = 0) -> None:
     """Index-verification guard (v2-plan guard 2): show, and where possible assert,
     the token that ``extract`` reads the hidden state from.
 
@@ -120,17 +120,20 @@ def verify_read_positions(tokenizer, examples: list[Example], n: int = 3,
         ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
         tail = ids[-6:]
         toks = [tokenizer.decode(t) for t in tail]
+        pos = len(ids) - 1 - read_offset
         if verbose:
             print(f"  label={ex.label} | last 6 tokens: "
                   f"{' '.join(repr(t) for t in toks)}")
-            print(f"    >>> READ POSITION (last token) = "
-                  f"{tokenizer.decode(ids[-1:])!r}")
+            print(f"    >>> READ POSITION (offset {read_offset}) = "
+                  f"{tokenizer.decode(ids[pos:pos + 1])!r}")
         prefix = ex.meta.get("assistant_prefix")
         if prefix is not None:
             m = re.search(r"\(([A-Z])\)", prefix)
             if m:
                 letter = m.group(1)
-                tail_text = tokenizer.decode(ids[-4:])
+                # the letter must sit in the 4-token window ENDING at the read
+                # position, whatever the offset
+                tail_text = tokenizer.decode(ids[max(0, pos - 3):pos + 1])
                 assert letter in tail_text, (
                     "read-position guard FAILED: expected the answer letter "
                     f"({letter}) among the final tokens, but the last tokens "
@@ -173,7 +176,7 @@ def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -
 
 def extract(model, tokenizer, examples: list[Example], device: str,
             verbose: bool = True, batch_size: int | None = None,
-            acts_dtype: np.dtype = np.float32):
+            acts_dtype: np.dtype = np.float32, read_offset: int = 0):
     """Run every example through the model in batches.
 
     Examples are sorted by prompt length before batching to minimise padding
@@ -192,6 +195,14 @@ def extract(model, tokenizer, examples: list[Example], device: str,
 
     Left-padding means every sequence's last real token sits at position -1,
     so we extract h[:, -1, :] without tracking per-example lengths.
+
+    `read_offset` shifts the read position BACK from the end: 0 (default) reads
+    the last token, 1 reads the second-to-last, etc. For a rollout commit prefix
+    " (X)" Qwen tokenises to [' (', 'X', ')'], so offset 0 reads the ')' and
+    offset 1 reads the letter token itself -- the read-position ablation asking
+    whether the choice signal is already consolidated at ')' or lives on the
+    letter. Left-padding keeps position -1-offset inside the real prompt for
+    every row (prompts are far longer than any sane offset).
 
     Returns:
         acts:   float array [n_examples, n_layers+1, hidden] (dtype=acts_dtype)
@@ -214,9 +225,10 @@ def extract(model, tokenizer, examples: list[Example], device: str,
         inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True).to(device)
         with torch.no_grad():
             out = model(**inputs, output_hidden_states=True)
-        # Slice last token on GPU, stack all layers, ONE transfer per batch:
-        # [n_layers+1, batch, hidden] -> [batch, n_layers+1, hidden]
-        last = torch.stack([h[:, -1, :] for h in out.hidden_states], dim=0)
+        # Slice the read position on GPU, stack all layers, ONE transfer per
+        # batch: [n_layers+1, batch, hidden] -> [batch, n_layers+1, hidden]
+        pos = -1 - read_offset
+        last = torch.stack([h[:, pos, :] for h in out.hidden_states], dim=0)
         last = last.permute(1, 0, 2).float().cpu().numpy()
         if acts is None:
             # [n_examples, n_layers+1, hidden]; fill in place so we never hold a

@@ -82,6 +82,13 @@ def main():
                          "question (default 0.9)")
     ap.add_argument("--gate-temperature", type=float, default=None,
                     help="--gate sampled only: sampling temperature (default 0.7)")
+    ap.add_argument("--parse", default="strict", choices=["strict", "lenient"],
+                    help="sandbagging rollout only (shared engine): 'lenient' adds "
+                         "fallback answer patterns ('B)', 'Answer: B') for rollouts "
+                         "that commit without the '(X)' format -- see the 56%% "
+                         "unparse rate on the 2026-07-13 instructed run. Strict is "
+                         "always tried first, so lenient never relabels anything "
+                         "strict could parse.")
     ap.add_argument("--rollout-prefix", default=None, choices=["commit", "text"],
                     help="rollout design only: what the read position sits on. "
                          "'commit' (default) = bare ' (X)' answer string, kills "
@@ -95,6 +102,14 @@ def main():
                          "no pressure exists so nothing deceptive can be happening. "
                          "AUROC here measures pure question-content signal; the "
                          "pressure run is only trustworthy above this baseline.")
+    ap.add_argument("--read-offset", type=int, default=0,
+                    help="read the hidden state N tokens BEFORE the last one. "
+                         "Rollout ablation: the ' (X)' commit prefix tokenises to "
+                         "[' (', 'X', ')'], so 0 (default) reads the ')' and 1 "
+                         "reads the letter token itself. Comparable AUROC at both "
+                         "offsets = the choice signal is consolidated by the close "
+                         "paren; a gap = the read position matters and 0 was "
+                         "reading a weaker copy.")
     ap.add_argument("--max-examples", type=int, default=None,
                     help="cap dataset size for speed; randomly drops whole prompts "
                          "(keeps matched pairs and label balance)")
@@ -145,6 +160,10 @@ def main():
             args.type == "sandbagging" and args.design == "rollout"):
         ap.error("--pressure incentive only applies to --type sandbagging "
                  "--design rollout (ADR 0011 addendum)")
+    if args.parse != "strict" and not (
+            args.type == "sandbagging" and args.design == "rollout"):
+        ap.error("--parse lenient only applies to --type sandbagging --design "
+                 "rollout (the shared engine; sycophancy keeps its own parser)")
     if (args.rollouts is not None or args.temperature is not None
             or args.max_new_tokens is not None or args.rollout_prefix is not None) and not (
             args.type in _rollout_types and args.design == "rollout"):
@@ -185,6 +204,7 @@ def main():
             _syc.ROLLOUT_PREFIX_MODE = args.rollout_prefix
     if args.type == "sandbagging" and args.design == "rollout":
         from dprobe.data import rollout as _ro
+        _ro.PARSE_MODE = args.parse
         _ro.GATE_MODE = args.gate
         if args.gate_n is not None:
             _ro.GATE_N = args.gate_n
@@ -242,11 +262,12 @@ def main():
 
     # guard: eyeball + assert the hidden state is read at the answer-commit token
     # (the most common silent bug) before paying for the extraction pass
-    verify_read_positions(tokenizer, examples)
+    verify_read_positions(tokenizer, examples, read_offset=args.read_offset)
 
     print(f"extracting activations for {len(examples)} examples ...")
     acts, labels = extract(model, tokenizer, examples, device, batch_size=args.batch_size,
-                           acts_dtype=np.dtype(args.acts_dtype))
+                           acts_dtype=np.dtype(args.acts_dtype),
+                           read_offset=args.read_offset)
 
     if args.permute:
         labels = np.random.default_rng(SEED).permutation(labels)
@@ -278,7 +299,10 @@ def main():
             or (args.type == "sandbagging" and args.design == "rollout")) else "n/a",
         "pressure": args.pressure if (
             args.type == "sandbagging" and args.design == "rollout") else "n/a",
+        "parse": args.parse if (
+            args.type == "sandbagging" and args.design == "rollout") else "n/a",
         "read_prompt": args.read_prompt,
+        "read_offset": args.read_offset,
         "method": args.method,
         "seed": SEED,
         "max_examples": args.max_examples,

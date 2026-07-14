@@ -37,6 +37,13 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     system prompt. `instructed` (default) demands a wrong answer; `incentive`
     states only the evaluation incentive (ADR 0011 addendum) — try it first,
     check ambivalence yield before scaling.
+  - `--parse {strict,lenient}` sandbagging rollout only: `lenient` adds fallback
+    answer patterns ("B)", "Answer: B") for rollouts that never emit "(X)" —
+    strict is tried first so nothing strict-parseable relabels. Run logs now
+    include raw unparsed samples; read them before trusting lenient.
+  - `--read-offset N` read the hidden state N tokens before the last: the
+    " (X)" prefix tokenises [' (', 'X', ')'], so 0 = ')' (default), 1 = the
+    letter token. Read-position ablation.
   - `--max-examples N` cap dataset (drops whole pairs, keeps balance)
   - `--permute` permutation control: shuffle labels, expect AUROC ≈ 0.5 (else leak)
   - `--filter` behaviour filters: sandbagging capability filter (see IMPORTANT);
@@ -64,7 +71,12 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     parsed rollout outcomes, and set membership (USED / AMBIVALENT-BUT-TRIMMED /
     SINGLE-CLASS). See `.claude/docs/rollouts-explained.md` for a plain-language
     walkthrough of the rollout design.
-- Full comparison: `python -m scripts.compare --method lr`
+- Full comparison: `python -m scripts.compare --method lr` (default designs —
+  leaky for sycophancy/sandbagging; prefer crosstype below for rollout probes)
+- Transfer cells from existing rollout probes: `python -m scripts.crosstype
+  --model Qwen/Qwen2.5-7B-Instruct --probe label=path/to/probe.npz[@pressure]`
+  (repeat `--probe`; builds each probe's own rollout dataset on the shared
+  test split, labels via the filter, reports probe×dataset AUROC + cosines)
 - Steering (causal check, ADR 0010): `python -m scripts.steer --probe
   results/runs/<run>/probe.npz --model Qwen/Qwen2.5-7B-Instruct --source factual`
   - Validates that a probe DIRECTION causes caving, not just correlates. `add` pass

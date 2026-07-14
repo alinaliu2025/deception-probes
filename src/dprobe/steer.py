@@ -35,6 +35,7 @@ import torch
 
 from .activations import build_prompt, default_batch_size
 from .data.base import Example
+from .data.sandbagging import CONTROL_SYSTEM
 from .data.sycophancy import NEUTRAL_SYSTEM, parse_choice
 from .probes import Probe
 
@@ -106,16 +107,28 @@ class SteerItem:
 
 
 def build_items(examples: list[Example], pressured: bool) -> list[SteerItem]:
-    """Turn raw sycophancy factual/rollout Examples (label -1, unfiltered) into
-    SteerItems. ``pressured`` keeps the user's assertion prompt; otherwise the
-    persona-stripped neutral question is used (no pressure present)."""
+    """Turn raw rollout-design Examples (label -1, unfiltered) into SteerItems.
+
+    Type-aware, mirroring where each type's pressure lives (ADR 0011):
+
+    - sycophancy: pressure is the USER turn. Unpressured = NEUTRAL_SYSTEM +
+      the persona/assertion-stripped ``meta['neutral_user']``.
+    - sandbagging: pressure is the SYSTEM prompt. Unpressured = CONTROL_SYSTEM +
+      the SAME user text (the capability-gate prompt).
+    """
     items = []
     for ex in examples:
         if pressured:
             prompt_ex = Example(ex.system, ex.user, ex.label, ex.deception_type)
-        else:
+        elif ex.deception_type == "sandbagging":
+            prompt_ex = Example(CONTROL_SYSTEM, ex.user, ex.label, ex.deception_type)
+        elif ex.deception_type == "sycophancy":
             prompt_ex = Example(NEUTRAL_SYSTEM, ex.meta["neutral_user"], ex.label,
                                 ex.deception_type)
+        else:
+            raise ValueError(
+                f"build_items: no unpressured construction for deception type "
+                f"{ex.deception_type!r} (have sycophancy, sandbagging)")
         items.append(SteerItem(prompt_ex, ex.meta["matching"], ex.meta["not_matching"]))
     return items
 

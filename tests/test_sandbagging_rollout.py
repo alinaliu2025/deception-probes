@@ -179,6 +179,40 @@ def test_engine_render_log_shows_set_membership():
     assert "questions_in: 3" in log
 
 
+def test_lenient_parser_only_extends_strict():
+    """Lenient (opt-in) parses formats strict misses, never changes a strict hit,
+    and still refuses letters that belong to neither tag."""
+    m, nm = " (A)", " (B)"
+    # strict hit: identical result through the lenient path
+    assert rollout.parse_choice_lenient(" (B) no.", m, nm) == \
+        sycophancy.parse_choice(" (B) no.", m, nm)
+    # strict misses these; lenient recovers them
+    assert rollout.parse_choice_lenient("B) it is heavier", m, nm)[0] == "not_matching"
+    assert rollout.parse_choice_lenient("The answer is B.", m, nm)[0] == "not_matching"
+    assert rollout.parse_choice_lenient("Answer: A", m, nm)[0] == "matching"
+    assert rollout.parse_choice_lenient(" A. because...", m, nm)[0] == "matching"
+    # unknown letter or no letter: still unparsed
+    assert rollout.parse_choice_lenient("The answer is C.", m, nm) == (None, None)
+    assert rollout.parse_choice_lenient("hmm let me think", m, nm) == (None, None)
+
+
+def test_parse_mode_defaults_to_strict():
+    """Nothing changes unless --parse lenient is passed (back-compat)."""
+    assert rollout.PARSE_MODE == "strict"
+
+
+def test_render_log_includes_unparsed_samples():
+    """The run log surfaces raw unparsed rollout texts when given them."""
+    stats = {"questions_in": 1, "ambivalent_questions": 0, "n_examples": 0}
+    log = rollout.render_log(stats, [], [], set(), "reason",
+                             unparsed_samples=["I need to think about this one"])
+    assert "UNPARSED ROLLOUT SAMPLES" in log
+    assert "I need to think about this one" in log
+    # and stays optional (old call shape still works)
+    log2 = rollout.render_log(stats, [], [], set(), "reason")
+    assert "UNPARSED ROLLOUT SAMPLES" not in log2
+
+
 def test_dispatcher_routes_by_design_marker():
     """sandbagging_filter must dispatch rollout examples to the engine (checked
     here only via the marker logic -- the engine itself needs a model)."""

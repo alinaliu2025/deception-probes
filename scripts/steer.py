@@ -1,8 +1,9 @@
 """Causally validate a probe direction by steering (ADR 0010).
 
-Detection AUROC is correlational; this asks whether the direction *drives* caving.
-Point it at a ``probe.npz`` from a train_one run and it runs two passes on fresh
-sycophancy `factual` items:
+Detection AUROC is correlational; this asks whether the direction *drives* the
+behaviour. Point it at a ``probe.npz`` from a train_one run and it runs two
+passes on fresh `factual` items OF THE PROBE'S OWN TYPE (sycophancy or
+sandbagging; the pressure location follows the type, see steer.build_items):
 
   add     -- add alpha*v on the UNPRESSURED question, sweep alpha, report the
              wrong-answer rate (a real caving direction pushes it up).
@@ -68,10 +69,19 @@ def main():
                     help="generation cap per completion (must reach the '(X)').")
     ap.add_argument("--batch-size", type=int, default=None,
                     help="generation batch size; default auto-picks from GPU VRAM.")
+    ap.add_argument("--pressure", default="instructed",
+                    choices=["instructed", "incentive"],
+                    help="sandbagging probes only: which pressure system prompt "
+                         "the PRESSURED (ablate) pass runs under (ADR 0011 "
+                         "addendum). Match it to the arm the probe was trained "
+                         "on. Ignored for sycophancy.")
     args = ap.parse_args()
 
     probe = load_probe(args.probe)
     print(f"probe: {probe.deception_type} | method {probe.method} | layer {probe.layer}")
+    if probe.deception_type not in ("sycophancy", "sandbagging"):
+        ap.error(f"steering is defined for sycophancy and sandbagging rollout "
+                 f"sources; probe is for {probe.deception_type!r}")
 
     model_name = args.model or MODEL_NAME
     model, tokenizer, device = load_model(model_name)
@@ -79,8 +89,10 @@ def main():
 
     # raw, unlabeled factual examples (label -1); the filter is NOT run -- steering
     # selects its own baseline-correct / baseline-caved subsets by generation.
-    examples = data.get("sycophancy", design="rollout", source=args.source,
-                        split=args.split)
+    # The dataset TYPE follows the probe: a sandbagging direction is validated on
+    # sandbagging prompts (pressure in the SYSTEM turn, see steer.build_items).
+    examples = data.get(probe.deception_type, design="rollout", source=args.source,
+                        split=args.split, pressure=args.pressure)
     if args.max_items is not None and len(examples) > args.max_items:
         examples = data.subsample(examples, args.max_items, SEED)
     print(f"steering on {len(examples)} {args.source} questions ({args.split} split)")
@@ -114,6 +126,7 @@ def main():
         "probe_layer": probe.layer,
         "source": args.source,
         "split": args.split,
+        "pressure": args.pressure if probe.deception_type == "sandbagging" else "n/a",
         "mode": args.mode,
         "control": args.control,
         "raw_alpha": args.raw,
