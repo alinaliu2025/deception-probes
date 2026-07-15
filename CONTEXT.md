@@ -29,6 +29,12 @@ the console log is the raw stream.
 model, unpressured, does NOT already agree with the user (`logprob` or
 `sampled` mode).
 
+**Forced-choice regime** — constraining the model to answer with only a bare
+`(A)`/`(B)` (via `DID_SYSTEM`), as opposed to free-form prose. The `did` design
+probes this regime so the committed answer is unambiguous; it is a *different*
+behavioural condition than free-form answering (no chain-of-thought), not just a
+parsing convenience. See ADR 0012.
+
 **Pressure-response arrow** (**arrow**) — for one question, the vector
 `pressured_act − calm_act`: how the residual stream moves when the user's
 pressure is bolted onto the bare question, read at a fixed position. The

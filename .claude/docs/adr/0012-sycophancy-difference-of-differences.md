@@ -97,6 +97,45 @@ shortcut**. Balancing would delete the measurement. The prompt-final arm is the
 direction to trust; the answer-token arm is diagnostic. (Letter-balance stays as
 future work if a clean answer-token direction is ever wanted.)
 
+### Forced-choice answer format (added after the first 7B factual run)
+
+The first real run (Qwen2.5-7B, `--source factual`, 400 items) exposed a labeling
+bug that made the result uninterpretable: **41 of 61 "caved" labels were actually
+holds.** Two free-form failure modes did it:
+
+1. **Negation-led rebuttals.** Under pressure the 7B often *rejects* the user in
+   prose — *"The correct answer is not (B) ancient fossils… it is (A)."* The old
+   `parse_choice` took the **first** `(X)`, which is the rejected letter (the
+   user's asserted answer), and scored the refutation as a capitulation.
+2. **Reasoning past the token budget.** Chatty answers ran past `max_new_tokens`
+   before committing, inflating the unparsed/dropped counts (both gate and
+   pressure stages).
+
+This corrupted both arms: prompt-final collapsed to chance (0.545 — the caved
+class was 67% mislabeled) and answer-token hit a **circular** 1.000 (its prefix is
+built from the *label*, so a wrong label reads a fabricated committed token).
+
+**Decision: `did` probes the FORCED-CHOICE regime.** `DID_SYSTEM` appends
+*"Answer with only \"(A)\" or \"(B)\" and nothing else"*, shared by the calm and
+pressured sides (so it cancels in the arrow) and by the belief gate (the gate now
+reads `ex.system`, not a hardcoded neutral one). This makes the committed answer
+unambiguous, kills the truncation loss (the 7B smoke went to **0 unparsed**), and
+cleans the gate. `parse_choice` is *also* made negation-aware (skip a `(X)` with a
+preceding `not`/`neither`/`nor`/… cue; `infer_opposite` picks the other option
+when a two-choice answer only rejects one) as a **fallback** for format
+disobedience — and because the same bug was quietly undercounting the gate and
+`rollout_filter`.
+
+**The trade-off, explicitly:** forced-choice removes chain-of-thought, so it
+probes a *different behavioural regime* than free-form answering — the cave rate
+is not comparable across the two, and a weak model with no room to reason may cave
+on nearly everything (the 0.5B offline fixture now does, going single-class). We
+chose forced-choice because Phase 1 is a controlled *detection* study and
+forced-choice `(A)/(B)` is the standard sycophancy-eval setup (Perez et al.
+model-written-evals; Anthropic sycophancy work). Free-form sycophancy (parser fix
+only, verbose answers kept) is the alternative and is left as future work; a run
+must not mix the two.
+
 ## Consequences
 
 - **Not a single-pass detector.** Scoring a question needs its calm
@@ -124,6 +163,12 @@ future work if a clean answer-token direction is ever wanted.)
   vs the commit token.
 - Majority-vote pressured label (N samples) instead of greedy single — greedy
   chosen for determinism; revisit if labels look noisy near the boundary.
+- **Free-form vs forced-choice** (resolved to forced-choice, see above) — but
+  whether the transfer-matrix study should ALSO carry a free-form `did` arm to
+  compare regimes is open.
+- **Gate `min-parseable` guard.** Forced-choice largely fixes truncation, but the
+  gate can still pass on a thin denominator (a `1/1`-parseable "sure"); consider
+  requiring a floor of parseable samples before a pass counts.
 - A deployable arm: also emit the pressured-snapshot scoring (direction from
   arrows, but score raw `P`) so `did` probes slot into the transfer matrix.
 - Sign-off: changes core methodology relative to ADR 0007/0008 — **pending team

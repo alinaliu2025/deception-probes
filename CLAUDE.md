@@ -41,7 +41,10 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     content, then diff-of-means on arrows is the capitulation direction; writes a
     probe+report for BOTH read positions (promptfinal = clean, answertoken =
     diagnostic, their AUROC gap = the letter shortcut), needs `--filter`, gate
-    defaults to `sampled` (ADR 0012, Proposed, pending team sign-off)
+    defaults to `sampled`; probes the FORCED-CHOICE regime (`DID_SYSTEM` makes the
+    model answer bare `(A)/(B)` — a different behavioural condition than free-form,
+    chosen after free-form answers mislabelled 41/61 caves via negation-led
+    rebuttals) (ADR 0012, Proposed, pending team sign-off)
   - `--read-prompt neutral` behavioral-design confound control;
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
