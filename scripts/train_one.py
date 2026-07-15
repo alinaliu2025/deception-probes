@@ -340,15 +340,27 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
 
     # single-class / starved filter output is a legitimate finding, not a crash:
     # record it (meta + filter trace) and exit cleanly so the run dir is not
-    # mistaken for an aborted run (ADR 0011 convention: no meta.json = crashed)
-    if not examples:
-        print("did: 0 examples survived the filter (see warning above) -- "
-              "nothing to train; writing meta + filter trace and exiting.")
+    # mistaken for an aborted run (ADR 0011 convention: no meta.json = crashed).
+    # Floor of 4 per class: below that the grouped held-out split can hand the
+    # fitter a single-class train set (the 2026-07-15 job 50455714 crash:
+    # 1 caved / 387 held -> balanced to 2 -> sklearn ValueError), and any AUROC
+    # from so few examples is meaningless anyway.
+    MIN_PER_CLASS = 4
+    n1 = sum(ex.label == 1 for ex in examples)
+    n0 = len(examples) - n1
+    if min(n1, n0) < MIN_PER_CLASS:
+        print(f"did: too few examples to train ({n1} caved / {n0} held after "
+              f"balancing; floor is {MIN_PER_CLASS}/class) -- writing meta + "
+              f"filter trace and exiting. The base rate in filter_stats is the "
+              f"finding.")
         if filter_log:
             (run_dir / "run_log.txt").write_text(filter_log, encoding="utf-8")
             print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
         meta = _base_meta(args, model_name, device, model, filter_stats)
-        meta.update({"n_examples": 0, "aborted": "no_examples_after_filter"})
+        meta.update({"n_examples": int(len(examples)),
+                     "n_label1": int(n1), "n_label0": int(n0),
+                     "aborted": "too_few_examples_after_filter",
+                     "min_per_class": MIN_PER_CLASS})
         runlog.write_meta(run_dir, meta)
         print(f"saved -> {run_dir}")
         return
