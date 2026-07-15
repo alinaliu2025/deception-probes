@@ -42,6 +42,11 @@ def main():
     ap.add_argument("--source", default="factual", choices=["factual", "factual-small"],
                     help="question source. 'factual' = ARC (needs network); "
                          "'factual-small' = offline repo fixture for a plumbing check.")
+    ap.add_argument("--pressure", default="instructed",
+                    choices=["instructed", "incentive"],
+                    help="sandbagging only: which pressure system to steer under. "
+                         "MUST match the arm the probe was trained on (a direction "
+                         "is arm-specific). Ignored for sycophancy.")
     ap.add_argument("--split", default="test", choices=["train", "test"],
                     help="which split to steer on; default 'test' (fresh items the "
                          "direction was not built from).")
@@ -97,10 +102,17 @@ def run(args, probe, run_dir):
     # raw, unlabeled factual examples (label -1); the filter is NOT run -- steering
     # selects its own baseline-correct / baseline-caved subsets by generation.
     # did probes were trained under forced choice; steer in the same regime so the
-    # activations v was learned on match and the caving measurement stays parseable
+    # activations v was learned on match and the caving measurement stays parseable.
+    # The TYPE comes from the probe, not a literal: a sandbagging direction must be
+    # steered on sandbagging items (calm = CONTROL system, ADR 0012 port), never on
+    # sycophancy items -- build_items routes the calm swap by type.
     steer_design = "did" if args.forced_choice else "rollout"
-    examples = data.get("sycophancy", design=steer_design, source=args.source,
-                        split=args.split)
+    steer_type = probe.deception_type
+    examples = data.get(steer_type, design=steer_design, source=args.source,
+                        split=args.split, pressure=args.pressure)
+    if steer_type == "sandbagging":
+        print(f"sandbagging pressure arm: {args.pressure} "
+              "(must match the probe's training arm)")
     if args.max_items is not None and len(examples) > args.max_items:
         examples = data.subsample(examples, args.max_items, SEED)
     print(f"steering on {len(examples)} {args.source} questions ({args.split} split)")
@@ -138,6 +150,7 @@ def run(args, probe, run_dir):
         "probe_method": probe.method,
         "probe_layer": probe.layer,
         "source": args.source,
+        "pressure": args.pressure if probe.deception_type == "sandbagging" else "n/a",
         "split": args.split,
         "mode": args.mode,
         "control": args.control,

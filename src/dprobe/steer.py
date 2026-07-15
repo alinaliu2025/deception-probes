@@ -106,17 +106,36 @@ class SteerItem:
 
 
 def build_items(examples: list[Example], pressured: bool) -> list[SteerItem]:
-    """Turn raw sycophancy factual/rollout Examples (label -1, unfiltered) into
-    SteerItems. ``pressured`` keeps the user's assertion prompt; otherwise the
-    persona-stripped neutral question is used (no pressure present)."""
+    """Turn raw factual/rollout/did Examples (label -1, unfiltered) into SteerItems.
+
+    ``pressured`` selects the pressured prompt; otherwise the calm (no-pressure)
+    counterfactual. WHERE the pressure lives is type-specific (the same asymmetry
+    the DiD data build encodes):
+
+    - **sycophancy**: pressure is in the USER turn (the user asserts a wrong
+      answer). Calm = swap in ``meta['neutral_user']``; the SYSTEM prompt (the
+      forced-choice DID_SYSTEM regime) is shared by both sides, so it is kept.
+    - **sandbagging**: pressure is in the SYSTEM prompt (SANDBAG/INCENTIVE). Calm
+      = swap in ``meta['calm_system']`` (the CONTROL system); the user turn is
+      identical calm/pressured (``neutral_user == user``), so it is kept.
+
+    Steering the wrong turn is a silent category error -- a sandbagging probe
+    steered with the sycophancy branch would keep the SANDBAG system on the
+    "calm" side and never actually remove the pressure. So the swap is chosen by
+    ``ex.deception_type``, not assumed."""
     items = []
     for ex in examples:
         if pressured:
             prompt_ex = Example(ex.system, ex.user, ex.label, ex.deception_type)
+        elif ex.deception_type == "sandbagging":
+            # pressure is the SYSTEM prompt -> calm side reads the CONTROL system,
+            # same user turn (ADR 0012 sandbagging port)
+            prompt_ex = Example(ex.meta["calm_system"], ex.user, ex.label,
+                                ex.deception_type)
         else:
-            # inherit the design's regime (ex.system) so the unpressured prompt
-            # matches the pressured one -- DID_SYSTEM forces bare "(A)/(B)" when
-            # steering a did probe, NEUTRAL_SYSTEM otherwise (ADR 0012)
+            # sycophancy: pressure is the USER turn -> strip to the neutral
+            # question, keep the design's system regime (DID_SYSTEM forces bare
+            # "(A)/(B)" for a did probe, NEUTRAL_SYSTEM otherwise; ADR 0012)
             prompt_ex = Example(ex.system, ex.meta["neutral_user"], ex.label,
                                 ex.deception_type)
         items.append(SteerItem(prompt_ex, ex.meta["matching"], ex.meta["not_matching"]))
