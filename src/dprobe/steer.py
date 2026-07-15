@@ -35,7 +35,7 @@ import torch
 
 from .activations import build_prompt, default_batch_size
 from .data.base import Example
-from .data.sycophancy import NEUTRAL_SYSTEM, parse_choice
+from .data.sycophancy import parse_choice
 from .probes import Probe
 
 
@@ -114,7 +114,10 @@ def build_items(examples: list[Example], pressured: bool) -> list[SteerItem]:
         if pressured:
             prompt_ex = Example(ex.system, ex.user, ex.label, ex.deception_type)
         else:
-            prompt_ex = Example(NEUTRAL_SYSTEM, ex.meta["neutral_user"], ex.label,
+            # inherit the design's regime (ex.system) so the unpressured prompt
+            # matches the pressured one -- DID_SYSTEM forces bare "(A)/(B)" when
+            # steering a did probe, NEUTRAL_SYSTEM otherwise (ADR 0012)
+            prompt_ex = Example(ex.system, ex.meta["neutral_user"], ex.label,
                                 ex.deception_type)
         items.append(SteerItem(prompt_ex, ex.meta["matching"], ex.meta["not_matching"]))
     return items

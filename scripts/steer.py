@@ -69,6 +69,12 @@ def main():
                     help="generation cap per completion (must reach the '(X)').")
     ap.add_argument("--batch-size", type=int, default=None,
                     help="generation batch size; default auto-picks from GPU VRAM.")
+    ap.add_argument("--forced-choice", action="store_true",
+                    help="steer in the forced-choice regime (DID_SYSTEM: bare "
+                         "'(A)/(B)' answers) so a did probe is measured in the same "
+                         "regime it was trained in -- avoids the free-form truncation "
+                         "that corrupts the caving measurement (ADR 0012). Pair with "
+                         "a small --max-new-tokens (e.g. 16).")
     args = ap.parse_args()
 
     probe = load_probe(args.probe)
@@ -90,7 +96,10 @@ def run(args, probe, run_dir):
 
     # raw, unlabeled factual examples (label -1); the filter is NOT run -- steering
     # selects its own baseline-correct / baseline-caved subsets by generation.
-    examples = data.get("sycophancy", design="rollout", source=args.source,
+    # did probes were trained under forced choice; steer in the same regime so the
+    # activations v was learned on match and the caving measurement stays parseable
+    steer_design = "did" if args.forced_choice else "rollout"
+    examples = data.get("sycophancy", design=steer_design, source=args.source,
                         split=args.split)
     if args.max_items is not None and len(examples) > args.max_items:
         examples = data.subsample(examples, args.max_items, SEED)
@@ -132,6 +141,8 @@ def run(args, probe, run_dir):
         "split": args.split,
         "mode": args.mode,
         "control": args.control,
+        "forced_choice": args.forced_choice,
+        "max_new_tokens": args.max_new_tokens,
         "raw_alpha": args.raw,
         "samples": args.samples,
         "temperature": args.temperature,
