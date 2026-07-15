@@ -52,6 +52,12 @@ def main():
                          "is a tiny repo-resident OFFLINE stand-in for 'factual' "
                          "(fixtures/factual_smoke.jsonl) for smoke tests and demos "
                          "-- runs with no network, NOT for trustworthy AUROC.")
+    ap.add_argument("--pressure", default="instructed",
+                    choices=["instructed", "incentive"],
+                    help="sandbagging did only: pressure system prompt. "
+                         "'instructed' (default) demands a wrong answer; "
+                         "'incentive' states only the evaluation incentive "
+                         "(ADR 0011 addendum).")
     ap.add_argument("--rollouts", type=int, default=None,
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
@@ -115,15 +121,31 @@ def main():
 
     if args.C is not None and args.method != "lr":
         print(f"warning: --C is lr-only and is ignored for --method {args.method}")
-    if args.design != "completion" and args.type != "sycophancy":
-        print(f"warning: --design is sycophancy-only and is ignored for --type {args.type}")
-    if args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did") and not args.filter:
+    # which (type, design) pairs exist: sycophancy has all of them; sandbagging
+    # has 'completion' (legacy seed) and 'did' (ADR 0012 ported, calm_system swap)
+    _did_run = args.design == "did" and args.type in ("sycophancy", "sandbagging")
+    if args.design != "completion" and args.type not in ("sycophancy", "sandbagging"):
+        print(f"warning: --design is ignored for --type {args.type}")
+    if args.type == "sandbagging" and args.design not in ("completion", "did"):
+        ap.error(f"--design {args.design} is not defined for sandbagging "
+                 "(have 'completion', 'did')")
+    if args.pressure != "instructed" and not (
+            args.type == "sandbagging" and args.design == "did"):
+        ap.error("--pressure incentive only applies to --type sandbagging "
+                 "--design did (ADR 0011 addendum)")
+    if ((args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did"))
+            or (args.type == "sandbagging" and args.design == "did")) and not args.filter:
         ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
     if args.source != "opinion" and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
-        ap.error(f"--source {args.source} requires --type sycophancy and --design "
-                 "behavioral, rollout or did (no pre-written completion exists, ADR 0009)")
+            args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")
+            or (args.type == "sandbagging" and args.design == "did")):
+        ap.error(f"--source {args.source} requires sycophancy --design behavioral/"
+                 "rollout/did or sandbagging --design did (ADR 0009/0012)")
+    if args.type == "sandbagging" and args.design == "did" and args.source == "opinion":
+        ap.error("sandbagging --design did needs --source factual (ARC) or "
+                 "factual-small (offline fixture); there is no opinion source "
+                 "for sandbagging")
     if (args.rollouts is not None or args.temperature is not None
             or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
@@ -132,9 +154,9 @@ def main():
     # --max-new-tokens caps generation length; it applies to both designs that
     # generate (rollout, and did -- its belief gate and pressured answer).
     if args.max_new_tokens is not None and not (
-            args.type == "sycophancy" and args.design in ("rollout", "did")):
-        ap.error("--max-new-tokens only applies to --type sycophancy "
-                 "--design rollout or did")
+            (args.type == "sycophancy" and args.design in ("rollout", "did"))
+            or (args.type == "sandbagging" and args.design == "did")):
+        ap.error("--max-new-tokens only applies to --design rollout or did")
     # did defaults the belief gate to 'sampled' (the consistency prerequisite,
     # ADR 0012); everything else defaults to 'logprob' (ADR 0007). --gate is None
     # when unset so an explicit choice is distinguishable from the default.
@@ -143,14 +165,19 @@ def main():
                        or args.gate_threshold is not None
                        or args.gate_temperature is not None)
     if gate_overridden and not (
-            args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
+            (args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did"))
+            or (args.type == "sandbagging" and args.design == "did")):
         ap.error("--gate/--gate-n/--gate-threshold/--gate-temperature only apply "
-                 "to --type sycophancy --design behavioral, rollout or did")
+                 "to sycophancy --design behavioral/rollout/did or sandbagging "
+                 "--design did")
     if (args.gate_n is not None or args.gate_threshold is not None
             or args.gate_temperature is not None) and gate_mode != "sampled":
         ap.error("--gate-n/--gate-threshold/--gate-temperature require --gate sampled")
     args.gate = gate_mode  # collapse the None default to the resolved mode for run()/meta
-    if args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did"):
+    # sandbagging did runs through the shared sycophancy.did_filter, so its gate
+    # knobs live in the sycophancy module either way
+    if (args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")
+            ) or (args.type == "sandbagging" and args.design == "did"):
         from dprobe.data import sycophancy as _syc
         _syc.GATE_MODE = gate_mode
         if args.gate_n is not None:
@@ -170,8 +197,7 @@ def main():
         if args.rollout_prefix is not None:
             _syc.ROLLOUT_PREFIX_MODE = args.rollout_prefix
     # did generates too (gate + pressured answer), sharing ROLLOUT_MAX_NEW_TOKENS
-    if (args.type == "sycophancy" and args.design == "did"
-            and args.max_new_tokens is not None):
+    if _did_run and args.max_new_tokens is not None:
         from dprobe.data import sycophancy as _syc
         _syc.ROLLOUT_MAX_NEW_TOKENS = args.max_new_tokens
     if args.read_prompt == "neutral" and not (
@@ -185,6 +211,7 @@ def main():
         if args.type == "sycophancy" and args.design not in ("framing", "behavioral", "rollout", "did"):
             ap.error("--filter for sycophancy requires --design framing, "
                      "behavioral, rollout or did (completion has no model choice)")
+    del _did_run  # guards done; run() re-derives it from args
 
     # run dir exists from the very start so console.log records the whole run;
     # meta.json is written last, so a dir without it is a crashed/aborted run
@@ -201,7 +228,8 @@ def run(args, run_dir):
     model, tokenizer, device = load_model(model_name)
     print(f"model: {model_name} | device: {device}")
 
-    examples = data.get(args.type, design=args.design, source=args.source)
+    examples = data.get(args.type, design=args.design, source=args.source,
+                        pressure=args.pressure)
     if args.max_examples is not None:
         before = len(examples)
         examples = data.subsample(examples, args.max_examples, SEED)
@@ -219,7 +247,9 @@ def run(args, run_dir):
 
     # difference-of-differences (ADR 0012) has its own dual-position extraction
     # and writes a probe + report for each read position, so it branches here
-    if args.type == "sycophancy" and args.design == "did":
+    # (sandbagging did runs the same path; calm_system in meta routes the calm
+    # side of each arrow to the CONTROL system prompt)
+    if args.design == "did" and args.type in ("sycophancy", "sandbagging"):
         _run_did(args, run_dir, model, tokenizer, device, examples,
                  filter_stats, filter_log, model_name)
         return
@@ -272,13 +302,16 @@ def run(args, run_dir):
 
 def _base_meta(args, model_name, device, model, filter_stats):
     """The meta.json fields shared by the standard and did run paths."""
+    _gated = ((args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did"))
+              or (args.type == "sandbagging" and args.design == "did"))
     return {
         "kind": "train_one",
         "type": args.type,
-        "design": args.design if args.type == "sycophancy" else "n/a",
-        "source": args.source if args.type == "sycophancy" else "n/a",
-        "gate": args.gate if (args.type == "sycophancy"
-                              and args.design in ("behavioral", "rollout", "did")) else "n/a",
+        "design": args.design if args.type in ("sycophancy", "sandbagging") else "n/a",
+        "source": args.source if args.type in ("sycophancy", "sandbagging") else "n/a",
+        "pressure": args.pressure if (
+            args.type == "sandbagging" and args.design == "did") else "n/a",
+        "gate": args.gate if _gated else "n/a",
         "read_prompt": args.read_prompt,
         "method": args.method,
         "seed": SEED,
@@ -304,6 +337,21 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
     estimate) in meta.
     """
     from dprobe.did import POSITIONS, extract_arrows
+
+    # single-class / starved filter output is a legitimate finding, not a crash:
+    # record it (meta + filter trace) and exit cleanly so the run dir is not
+    # mistaken for an aborted run (ADR 0011 convention: no meta.json = crashed)
+    if not examples:
+        print("did: 0 examples survived the filter (see warning above) -- "
+              "nothing to train; writing meta + filter trace and exiting.")
+        if filter_log:
+            (run_dir / "run_log.txt").write_text(filter_log, encoding="utf-8")
+            print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
+        meta = _base_meta(args, model_name, device, model, filter_stats)
+        meta.update({"n_examples": 0, "aborted": "no_examples_after_filter"})
+        runlog.write_meta(run_dir, meta)
+        print(f"saved -> {run_dir}")
+        return
 
     print(f"extracting DiD arrows for {len(examples)} questions x 4 reads ...")
     arrows, labels, groups = extract_arrows(

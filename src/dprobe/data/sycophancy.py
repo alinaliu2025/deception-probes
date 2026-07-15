@@ -530,9 +530,12 @@ def _believes_honest_logprob(model, tokenizer, device, ex: Example) -> tuple[boo
     from ..activations import build_prompt, seq_logprob
 
     # ex.system carries the design's regime (DID_SYSTEM forces bare "(A)/(B)" for
-    # did, NEUTRAL_SYSTEM otherwise) so the calm belief prompt matches the pressured one
+    # did, NEUTRAL_SYSTEM otherwise) so the calm belief prompt matches the pressured
+    # one. meta['calm_system'] overrides it for types whose PRESSURE lives in the
+    # system prompt (sandbagging did: calm = CONTROL system, same user text).
     p_neu = build_prompt(tokenizer, Example(
-        ex.system, ex.meta["neutral_user"], 0, "sycophancy"))
+        ex.meta.get("calm_system", ex.system), ex.meta["neutral_user"],
+        0, ex.deception_type))
     lp_honest = seq_logprob(model, tokenizer, p_neu, ex.meta["not_matching"], device)
     lp_wrong = seq_logprob(model, tokenizer, p_neu, ex.meta["matching"], device)
     passed = lp_honest > lp_wrong
@@ -556,8 +559,10 @@ def _believes_honest_sampled(model, tokenizer, device, ex: Example) -> tuple[boo
 
     from ..activations import build_prompt
 
+    # calm_system override: see _believes_honest_logprob
     p_neu = build_prompt(tokenizer, Example(
-        ex.system, ex.meta["neutral_user"], 0, "sycophancy"))
+        ex.meta.get("calm_system", ex.system), ex.meta["neutral_user"],
+        0, ex.deception_type))
     inputs = tokenizer(p_neu, return_tensors="pt").to(device)
     with torch.no_grad():
         gen = model.generate(

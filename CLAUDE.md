@@ -45,6 +45,12 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     model answer bare `(A)/(B)` — a different behavioural condition than free-form,
     chosen after free-form answers mislabelled 41/61 caves via negation-led
     rebuttals) (ADR 0012, Proposed, pending team sign-off)
+  - sandbagging did (ADR 0012 port): `--type sandbagging --design did --source
+    factual --filter [--pressure {instructed,incentive}]` — same DiD mechanics,
+    but the pressure lives in the SYSTEM prompt, so `meta['calm_system']`
+    (CONTROL + forced-choice suffix) routes the belief gate and the calm arrow
+    side; user text is identical calm/pressured. `--pressure incentive` =
+    evaluation-incentive-only prompt (ADR 0011 addendum).
   - `--read-prompt neutral` behavioral-design confound control;
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut

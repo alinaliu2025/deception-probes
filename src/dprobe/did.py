@@ -42,10 +42,14 @@ def _variants(ex: Example) -> dict[str, Example]:
     not_matching = ex.meta["not_matching"]
     pressured_ans = matching if ex.label == 1 else not_matching
     neutral = ex.meta["neutral_user"]
+    # calm side: sycophancy strips the user turn (pressure lives there);
+    # sandbagging swaps the SYSTEM prompt instead -- meta['calm_system']
+    # carries the control system, and neutral == ex.user (same question text).
+    calm_system = ex.meta.get("calm_system", ex.system)
     return {
-        "calm_promptfinal": Example(ex.system, neutral, ex.label, ex.deception_type),
+        "calm_promptfinal": Example(calm_system, neutral, ex.label, ex.deception_type),
         "pressured_promptfinal": Example(ex.system, ex.user, ex.label, ex.deception_type),
-        "calm_answertoken": Example(ex.system, neutral, ex.label, ex.deception_type,
+        "calm_answertoken": Example(calm_system, neutral, ex.label, ex.deception_type,
                                     meta={"assistant_prefix": not_matching}),
         "pressured_answertoken": Example(ex.system, ex.user, ex.label, ex.deception_type,
                                          meta={"assistant_prefix": pressured_ans}),

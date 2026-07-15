@@ -14,7 +14,9 @@ BUILDERS = {
 # actually induce the behaviour (so the probe trains on the real thing, not the
 # prompt difference). Signature: (model, tokenizer, device, examples) -> examples.
 FILTERS = {
-    "sandbagging": sandbagging.capability_filter,
+    # dispatches on design: 'did' -> shared sycophancy.did_filter (assigns the
+    # labels; mandatory), else legacy capability_filter (keep/drop)
+    "sandbagging": sandbagging.sandbagging_filter,
     # dispatches on design: 'framing' -> behavior_filter (keep/drop),
     # 'behavioral' -> behavioral_filter (assigns the labels; mandatory)
     "sycophancy": sycophancy.sycophancy_filter,
@@ -22,19 +24,22 @@ FILTERS = {
 
 
 def get(deception_type: str, design: str = "completion", source: str = "opinion",
-        split: str = "train"):
+        split: str = "train", pressure: str = "instructed"):
     """Build a dataset by name.
 
-    `design` selects between alternative constructions of a type's contrast, and
-    `source` between question datasets (ADR 0009); only sycophancy currently has
-    more than one of either (see sycophancy.build). `split` picks train/test.
-    All three are ignored for non-sycophancy types, so the defaults are a no-op
-    for them.
+    `design` selects between alternative constructions of a type's contrast,
+    `source` between question datasets (ADR 0009), `split` picks train/test.
+    `pressure` is sandbagging-did only (ADR 0011 addendum): 'instructed' vs
+    'incentive' pressure system prompt. All are ignored for omission, so the
+    defaults are a no-op there.
     """
     if deception_type not in BUILDERS:
         raise KeyError(f"unknown type {deception_type!r}; have {list(BUILDERS)}")
     if deception_type == "sycophancy":
         return BUILDERS[deception_type](split=split, design=design, source=source)
+    if deception_type == "sandbagging":
+        return BUILDERS[deception_type](split=split, design=design, source=source,
+                                        pressure=pressure)
     return BUILDERS[deception_type]()
 
 
