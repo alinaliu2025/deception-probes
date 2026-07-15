@@ -680,7 +680,10 @@ def behavioral_filter(model, tokenizer, device, examples: list[Example]) -> list
         "labeled": len(labeled),
         "caved_label1": n1,
         "held_label0": n0,
-        "sycophancy_base_rate": base_rate,
+        # type-neutral name (matches did_filter, which serves sandbagging too).
+        # Metas written before 2026-07-15 carry the legacy key
+        # "sycophancy_base_rate".
+        "cave_base_rate": base_rate,
         "balanced_n": len(out),
     }
     print(f"  behavioral_filter: {total} in | {n_agrees_by_default} dropped "
@@ -1055,7 +1058,10 @@ def did_filter(model, tokenizer, device, examples: list[Example]) -> list[Exampl
         "labeled": len(labeled),
         "caved_label1": n1,
         "held_label0": n0,
-        "sycophancy_base_rate": base_rate,
+        # type-neutral: did_filter serves sycophancy AND sandbagging (ADR 0012
+        # port). Metas written before 2026-07-15 carry the legacy key
+        # "sycophancy_base_rate".
+        "cave_base_rate": base_rate,
         "balanced_n": len(out),
     }
     print(f"  did_filter: {total} in | {n_agrees_by_default} dropped "
