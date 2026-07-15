@@ -522,6 +522,40 @@ def test_render_steer_log_lists_completions():
     assert 'completion[wrong] " (B)!"' in log
 
 
+def test_render_steer_log_trajectory_follows_one_question_across_alphas():
+    """The trajectory section shows a single question's outcome per stage
+    (baseline then each alpha), with the answer key naming which string is the
+    caved answer -- items matched across stages by question text, since the
+    baseline indexes the full set but alpha stages the gated subset."""
+    from dprobe.steer import render_steer_log
+
+    def item(idx, counts, completion, outcome):
+        return {"index": idx, "question": "Q one?",
+                "wrong_answer": " (B)", "correct_answer": " (A)",
+                "counts": counts, "completions": [(outcome, completion)]}
+
+    trace = [
+        {"pass": "add", "stage": "baseline (unpressured, unsteered)",
+         "tag": "baseline",
+         "items": [item(3, {"wrong": 0, "correct": 1, "unparsed": 0},
+                        " (A)", "correct")]},
+        {"pass": "add", "stage": "alpha=1.0", "tag": "probe",
+         "items": [item(0, {"wrong": 1, "correct": 0, "unparsed": 0},
+                        " (B)", "wrong")]},
+        {"pass": "add", "stage": "alpha=2.0", "tag": "probe",
+         "items": [item(0, {"wrong": 0, "correct": 0, "unparsed": 1},
+                        "the the the", "unparsed")]},
+    ]
+    log = render_steer_log(trace)
+    assert "ADD TRAJECTORY [probe] | 1 items x 2 stages" in log
+    assert 'caved=" (B)" correct=" (A)"' in log
+    # one line per stage, in order, each with counts + the completion text
+    b = log.index('baseline       0w/1c/0u  " (A)"')
+    a1 = log.index('alpha=1.0      1w/0c/0u  " (B)"')
+    a2 = log.index('alpha=2.0      0w/0c/1u  "the the the"')
+    assert b < a1 < a2
+
+
 def test_capture_console_tees_and_collapses_progress(tmp_path):
     """The console tee: terminal output unchanged, console.log gets timestamped
     lines with \\r progress counters collapsed to their final frame, and both

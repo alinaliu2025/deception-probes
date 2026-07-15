@@ -46,7 +46,7 @@ def main():
                     help="which split to steer on; default 'test' (fresh items the "
                          "direction was not built from).")
     ap.add_argument("--mode", default="both", choices=["add", "ablate", "both"])
-    ap.add_argument("--alphas", default="0,0.25,0.5,1,2,4",
+    ap.add_argument("--alphas", default="0,0.25,0.5,0.75,1,1.5,2,2.5,3,4",
                     help="comma-separated add-pass strengths. By default each is a "
                          "MULTIPLE of the layer's mean residual norm (portable "
                          "across model sizes); pass --raw to treat them as absolute.")

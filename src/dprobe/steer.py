@@ -163,6 +163,8 @@ def _classify(model, tokenizer, items: list[SteerItem], device: str,
             results[i] = counts
             if detail is not None:
                 detail.append({"index": i, "question": items[i].example.user,
+                               "wrong_answer": items[i].matching,
+                               "correct_answer": items[i].not_matching,
                                "counts": counts, "completions": completions})
     return results  # type: ignore[return-value]
 
@@ -366,14 +368,65 @@ def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device:
             "control_ablated_caving": control_rate, "n_items": len(caved)}
 
 
+def _answer_key(it: dict) -> str:
+    """One-line answer key for a trace item: which string means caved vs correct.
+
+    Old traces (before the answer strings were recorded) render without it."""
+    from .tracefmt import qtext
+
+    if it.get("wrong_answer") is None:
+        return ""
+    return (f" [caved={qtext(it['wrong_answer'])} "
+            f"correct={qtext(it['correct_answer'])}]")
+
+
+def _trajectory_section(pass_name: str, tag: str, stage_seq: list[dict],
+                        baseline: dict | None) -> tuple[str, list[str]]:
+    """One block per QUESTION, one line per stage (baseline, then each alpha /
+    the ablated pass) with its counts and first completion -- the read-down view
+    of a single item degrading as the intervention strengthens. Items are
+    matched across stages by question text: the baseline covers all items but
+    the steered stages only the baseline-gated subset, so indexes differ."""
+    from .tracefmt import qtext, short
+
+    by_q = [{it["question"]: it for it in ev["items"]} for ev in stage_seq]
+    base_by_q = ({it["question"]: it for it in baseline["items"]}
+                 if baseline is not None else {})
+    lead = sorted(stage_seq[0]["items"], key=lambda d: d["index"])
+    heading = (f"{pass_name.upper()} TRAJECTORY [{tag}] | {len(lead)} items x "
+               f"{len(stage_seq)} stages")
+    body = ["legend: per stage w=caved to the asserted answer, c=correct, "
+            "u=unparsed, then the FIRST completion's text"]
+    for it in lead:
+        q = it["question"]
+        body.append(f"item {it['index']:>4}{_answer_key(it)} :: {short(q)}")
+        rows = ([("baseline", base_by_q[q])] if q in base_by_q else [])
+        rows += [(ev["stage"], d[q]) for ev, d in zip(stage_seq, by_q) if q in d]
+        for label, rec in rows:
+            c = rec["counts"]
+            first = rec["completions"][0][1] if rec["completions"] else ""
+            body.append(f"    {label:<14} {c['wrong']}w/{c['correct']}c/"
+                        f"{c['unparsed']}u  {qtext(first)}")
+    return heading, body
+
+
 def render_steer_log(trace: list) -> str:
-    """Human-readable per-item trace of a steering run: one section per stage
-    (baseline / each alpha / ablated, x probe / random control), with every
-    completion's full text and parse. Written to ``run_dir/run_log.txt`` by
-    scripts/steer.py so a run is inspectable after the fact."""
+    """Human-readable per-item trace of a steering run. TRAJECTORY sections
+    first (one block per question, one line per stage -- watch a single item
+    flip or degrade as alpha climbs), then one section per stage (baseline /
+    each alpha / ablated, x probe / random control) with every completion's
+    full text and parse. Written to ``run_dir/run_log.txt`` by scripts/steer.py
+    so a run is inspectable after the fact."""
     from .tracefmt import qtext, render, short
 
     sections = []
+    for pass_name in ("add", "ablate"):
+        evs = [ev for ev in trace if ev["pass"] == pass_name]
+        baseline = next((ev for ev in evs if ev["tag"] == "baseline"), None)
+        for tag in ("probe", "random"):
+            seq = [ev for ev in evs if ev["tag"] == tag]
+            if seq:
+                sections.append(_trajectory_section(pass_name, tag, seq, baseline))
     for ev in trace:
         counts = [it["counts"] for it in ev["items"]]
         heading = (f"{ev['pass'].upper()} | {ev['stage']} [{ev['tag']}] | "
@@ -384,7 +437,7 @@ def render_steer_log(trace: list) -> str:
         for it in sorted(ev["items"], key=lambda d: d["index"]):
             c = it["counts"]
             body.append(f"item {it['index']:>4} {c['wrong']}w/{c['correct']}c/"
-                        f"{c['unparsed']}u :: {short(it['question'])}")
+                        f"{c['unparsed']}u{_answer_key(it)} :: {short(it['question'])}")
             for outcome, t in it["completions"]:
                 body.append(f"    completion[{outcome}] {qtext(t)}")
         sections.append((heading, body))
