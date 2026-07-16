@@ -1,0 +1,65 @@
+{
+  "utc": "2026-07-16T05:11:25+00:00",
+  "host": "p0330",
+  "git_sha": "9141814",
+  "git_dirty": false,
+  "python": "3.10.20",
+  "versions": {
+    "torch": "2.5.1+cu121",
+    "transformers": "5.13.0",
+    "scikit-learn": "1.7.2",
+    "numpy": "1.26.4"
+  },
+  "kind": "crosstype_did",
+  "design": "did",
+  "position": "promptfinal",
+  "probes": {
+    "syco": {
+      "path": "results/runs/2026-07-15T01-51-38Z_sycophancy_mms_cb29054_p0303/probe_promptfinal.npz",
+      "pressure": "instructed",
+      "type": "sycophancy",
+      "method": "mms",
+      "layer": 19
+    },
+    "sand-inst": {
+      "path": "results/runs/2026-07-16T03-49-37Z_sandbagging_mms_b271758_p0306/probe_promptfinal.npz",
+      "pressure": "instructed",
+      "type": "sandbagging",
+      "method": "mms",
+      "layer": 20
+    }
+  },
+  "source": "factual",
+  "split": "test",
+  "seed": 0,
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "device": "cuda",
+  "dataset_sizes": {
+    "('sycophancy', '-')": 44,
+    "('sandbagging', 'instructed')": 254
+  },
+  "transfer_order": [
+    "syco",
+    "sand-inst"
+  ],
+  "transfer_auroc": [
+    [
+      0.8760330578512396,
+      0.5585591171182341
+    ],
+    [
+      0.8388429752066116,
+      0.7085374170748342
+    ]
+  ],
+  "direction_cosines": [
+    [
+      1.0000001192092896,
+      -0.13147428631782532
+    ],
+    [
+      -0.13147428631782532,
+      1.0
+    ]
+  ]
+}
