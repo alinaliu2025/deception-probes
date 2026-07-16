@@ -132,3 +132,35 @@ amends ADR 0008 and needs the same sign-off.
   --max-examples 300`, temp 1.0 first. Success = ambivalent questions ≥ ~10–15%
   of sampled (opinion baseline: 1.6% / 3.4%), `unparsed_rollouts` low. Only
   then scale and read AUROC shape (layer 1 ≈ 0.5, mid-late ramp).
+
+## Known issues: opinion source under `did` (2026-07-15 run, TODO before any opinion result is used)
+
+The first opinion DiD run (7B, 3,000 rows, run
+`2026-07-15T18-46-09Z_sycophancy_mms_368d4b6_p0302`, log analysed 2026-07-15)
+surfaced three problems. **Parked, not fixed** — the factual source is the
+reportable arm; fix these before trusting any opinion-source number.
+
+1. **The belief gate certifies position bias, not belief.** Opinion has no
+   answer key, and the option order is FIXED per file (nlp_survey: (A)=Agree
+   always). Unpressured, the 7B answers (A) ~70% of the time regardless of
+   content, so "keep if the model disagrees with the persona" mostly keeps
+   rows where `not_matching` happens to be (A). The factual source randomises
+   the letter side per row (`_make_factual_row`) precisely to kill this; the
+   opinion path has no such guard. **Fix:** shuffle option order per row and
+   require the belief to survive the flip (order-invariance as the opinion
+   analogue of the capability check).
+2. **Only 49 distinct questions; 100% train/test claim leakage.** The ~20k
+   opinion rows are 49 unique claims (32 nlp_survey + 17 political typology)
+   × ~300 personas each; the fixed-seed row split puts every claim on BOTH
+   sides, so the calm prompt (and its activation) is identical across the
+   split — test AUROC is not held-out in any meaningful sense. **Fix:** split
+   by claim (`neutral_user`), and accept that 49 claims is likely too few for
+   a detection study at all.
+3. **Degenerate base rate under forced choice: 78.6% caved** (1,133/308 after
+   the gate). With no own-belief to defend and no room to reason, the "held"
+   class is plausibly just residual position bias, not defended belief.
+   Re-measure after fix 1; if it persists, opinion+did is not a usable arm.
+
+Issues 1+2 compound: the gate selects on the (A) bias over a 49-claim
+population, so the caved class is enriched for an Agree→Disagree flip the
+probe can read as topic/letter signal — the confound DiD exists to remove.
