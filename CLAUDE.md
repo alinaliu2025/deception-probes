@@ -69,7 +69,7 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     walkthrough of the rollout design.
 - Full comparison: `python -m scripts.compare --method lr`
 - Steering (causal check, ADR 0010): `python -m scripts.steer --probe
-  results/runs/<run>/probe.npz --model Qwen/Qwen2.5-7B-Instruct --source factual`
+  results/runs/<run>/probe.npz --model allenai/OLMo-2-1124-7B-Instruct --source factual`
   - Validates that a probe DIRECTION causes caving, not just correlates. `add` pass
     adds `alpha·v` on unpressured items (wrong-rate should climb with alpha);
     `ablate` pass projects `v` out on pressured items (caving should drop).
@@ -84,6 +84,12 @@ Architecture Decision Records live in `.claude/docs/adr/`. Use sequential number
 
 ## Conventions
 
+- Model: `config.LOCAL_MODEL` = `allenai/OLMo-2-0425-1B-Instruct` (small, ungated,
+  CPU-friendly) for local smoke runs; `config.OSC_MODEL` =
+  `allenai/OLMo-2-1124-7B-Instruct` on GPU. Resolution order is `--model` >
+  `$DPROBE_MODEL` > `LOCAL_MODEL`; the resolved id lands in `meta.json`.
+  A direction is model-specific: never steer a probe with a model it wasn't
+  trained on, and don't compare `best_layer` across models (different depths).
 - Label **1 = deceptive condition, 0 = control**. Never flip this.
 - A matched control/deceptive pair must differ ONLY in what induces the behaviour
   (system prompt or user framing), never the underlying task.

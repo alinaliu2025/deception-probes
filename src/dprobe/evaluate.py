@@ -48,6 +48,21 @@ def layer_sweep(acts: np.ndarray, labels: np.ndarray, method: str, deception_typ
     fit_kwargs = {"C": C} if (method == "lr" and C is not None) else {}
     n_layers = acts.shape[1]
     tr, te = split(len(labels), labels, groups)
+    # A too-small surviving set can put every positive (or every negative) on one
+    # side of the split; the fitters then fail deep in sklearn with an opaque
+    # "solver needs samples of at least 2 classes". Say what actually went wrong,
+    # since by this point a run has already paid for the gate and extraction.
+    for name, part in (("train", tr), ("test", te)):
+        present = np.unique(labels[part])
+        if len(present) < 2:
+            raise ValueError(
+                f"{name} split has only class {present.tolist()} "
+                f"({len(part)} of {len(labels)} examples): too few examples "
+                "survived filtering to form a two-class split. Widen the "
+                "dataset (--max-examples / a bigger --source) or loosen the "
+                "filter -- the model may simply be failing the belief gate on "
+                "most questions."
+            )
     aurocs = []
     best = {"layer": -1, "auroc": -1.0, "probe": None}
     for layer in range(n_layers):

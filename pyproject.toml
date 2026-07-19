@@ -8,7 +8,8 @@ version = "0.1.0"
 requires-python = ">=3.9"
 dependencies = [
     "torch",
-    "transformers",
+    # >=4.47 for Olmo2ForCausalLM; >=4.56 for the from_pretrained `dtype` kwarg
+    "transformers>=4.56",
     "scikit-learn",
     "numpy<2",
     "matplotlib",

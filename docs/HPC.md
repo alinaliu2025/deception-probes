@@ -63,13 +63,16 @@ export HF_HOME=/fs/scratch/PAS2324/hf   # scratch: fast, big, ~90-day purge
 
 ## Switching model size (no code edits)
 
-`config.py` default stays 0.5B for local runs. Override via env var:
+`config.py` default stays the small OLMo-2 1B for local runs. Override via env var:
 
 ```bash
-export DPROBE_MODEL=Qwen/Qwen2.5-7B-Instruct
+export DPROBE_MODEL=allenai/OLMo-2-1124-7B-Instruct
 python -m scripts.compare --method lr
-# or, in batch:  sbatch --export=ALL,DPROBE_MODEL=Qwen/Qwen2.5-14B-Instruct scripts/osc/compare.sbatch
+# or, in batch:  sbatch --export=ALL,DPROBE_MODEL=allenai/OLMo-2-1124-13B-Instruct scripts/osc/compare.sbatch
 ```
+
+Precedence is `--model` > `$DPROBE_MODEL` > `config.LOCAL_MODEL`. The resolved id is
+written to the run's `meta.json`, so check there if a run's scale looks wrong.
 
 ## Job cheatsheet (batch path)
 

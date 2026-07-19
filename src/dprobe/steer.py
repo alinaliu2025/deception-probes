@@ -52,13 +52,19 @@ def load_probe(path) -> Probe:
 
 
 def _decoder_layers(model):
-    """The decoder block ModuleList (Qwen2.5: ``model.model.layers``)."""
+    """The decoder block ModuleList (``model.model.layers``).
+
+    Holds for the Llama-style layouts we run: OLMo-2 (``Olmo2ForCausalLM``),
+    Qwen2.5, Llama, Mistral. Models that nest their blocks elsewhere
+    (GPT-NeoX ``gpt_neox.layers``, Falcon ``transformer.h``) need a case here.
+    """
     inner = getattr(model, "model", model)
     layers = getattr(inner, "layers", None)
     if layers is None:
         raise AttributeError(
-            "could not find decoder layers at model.model.layers -- steer.py "
-            "assumes a Qwen2.5-style LlamaModel layout"
+            f"could not find decoder layers at model.model.layers on "
+            f"{type(model).__name__} -- steer.py assumes a Llama-style layout "
+            "(OLMo-2 / Qwen2.5 / Llama / Mistral)"
         )
     return layers
 

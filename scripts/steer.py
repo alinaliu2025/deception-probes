@@ -9,12 +9,10 @@ sycophancy `factual` items:
   ablate  -- project v out on the PRESSURED prompt, report the caving-rate drop.
 
     # 7B on OSC, direction from a prior run you scp'd back:
-    python -m scripts.steer --probe results/runs/<run>/probe.npz \
-      --model Qwen/Qwen2.5-7B-Instruct --source factual
+    python -m scripts.steer --probe results/runs/<run>/probe.npz --model allenai/OLMo-2-1124-7B-Instruct --source factual
 
     # offline plumbing check (no network, not trustworthy):
-    python -m scripts.steer --probe results/runs/<run>/probe.npz \
-      --source factual-small
+    python -m scripts.steer --probe results/runs/<run>/probe.npz --source factual-small
 
 Writes its own run dir (kind="steer"); meta.json holds the curves.
 """
