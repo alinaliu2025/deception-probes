@@ -142,15 +142,17 @@ def verify_read_positions(tokenizer, examples: list[Example], n: int = 3,
         print("  read-position check passed")
 
 
-def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
-    """Total log-prob the model assigns to `continuation` following `prompt`.
+def seq_logprob_tokens(model, tokenizer, prompt: str, continuation: str,
+                       device: str) -> tuple[float, int]:
+    """(total log-prob, #scored tokens) for `continuation` following `prompt`.
 
     Teacher-forced: one forward pass over prompt+continuation, summing the log-prob
-    of each continuation token. Used by sycophancy.behavior_filter to decide which
-    of two MCQ answers the model prefers (score each, pick the higher) without
-    sampling. The shared-prefix length is found by token-id match so a tokenizer
-    boundary merge between prompt and continuation can't shift the scored span.
-    Returns -inf if the continuation adds no tokens.
+    of each continuation token. The shared-prefix length is found by token-id match
+    so a tokenizer boundary merge between prompt and continuation can't shift the
+    scored span. Returns (-inf, 0) if the continuation adds no tokens. The token
+    count lets callers length-NORMALIZE, which matters when comparing continuations
+    of different token length (concept answers, ADR 0013) -- the raw sum favours
+    the shorter one.
     """
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
     full_ids = tokenizer(prompt + continuation, return_tensors="pt").input_ids[0]
@@ -159,7 +161,7 @@ def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -
            and int(prompt_ids[n]) == int(full_ids[n])):
         n += 1
     if n >= len(full_ids):
-        return float("-inf")
+        return float("-inf"), 0
     inp = full_ids.unsqueeze(0).to(device)
     with torch.no_grad():
         logits = model(inp).logits[0].float()  # [T, vocab]
@@ -168,6 +170,18 @@ def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -
     total = 0.0
     for i in range(n, len(full_ids)):
         total += float(logprobs[i - 1, int(full_ids[i])])
+    return total, len(full_ids) - n
+
+
+def seq_logprob(model, tokenizer, prompt: str, continuation: str, device: str) -> float:
+    """Total log-prob the model assigns to `continuation` following `prompt`.
+
+    Used by the MCQ filters to decide which of two same-length ' (X)' answers the
+    model prefers (score each, pick the higher) without sampling. For answers that
+    differ in token length, use `seq_logprob_tokens` and normalize instead.
+    Returns -inf if the continuation adds no tokens.
+    """
+    total, _ = seq_logprob_tokens(model, tokenizer, prompt, continuation, device)
     return total
 
 

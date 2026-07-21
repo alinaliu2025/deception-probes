@@ -53,11 +53,19 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut
     ablation, ADR 0009 addendum)
-  - `--source {factual,factual-small}` sycophancy behavioral/rollout/did only:
-    `factual` = ARC MCQs, user asserts a wrong answer (ADR 0009, Proposed);
-    `factual-small` = tiny repo-resident OFFLINE fixture
-    (`src/dprobe/data/fixtures/factual_smoke.jsonl`) for smoke tests/demos, no
-    network, NOT trustworthy AUROC
+  - `--source {factual,factual-small,concept,concept-small}` sycophancy
+    behavioral/rollout/did question source: `factual` = ARC MCQs, user asserts a
+    wrong answer as an A/B letter (ADR 0009, Proposed); `factual-small` = tiny
+    repo-resident OFFLINE fixture (`src/dprobe/data/fixtures/factual_smoke.jsonl`)
+    for smoke tests/demos; `concept` (did ONLY, ADR 0013, Proposed) = drops the
+    (A)/(B) letter — user asserts a wrong CONCEPT and the model answers one word,
+    so there is no letter/B-pusher shortcut by construction; labeled by NORMALIZED
+    logprob (the decider) with a greedy one-word GENERATION cross-check
+    (AGREE/DIVERGE per item in run_log.txt, divergence rate in meta.json); reports
+    the cave rate and warns outside the 15–85% validity band; `concept-small` = its
+    tiny OFFLINE smoke subset (`fixtures/concept_smoke.jsonl`). factual-small and
+    concept-small run with no network, NOT trustworthy AUROC. concept is the
+    fallback if dual letter ordering (ADR 0012 amendment) doesn't kill B-pusher.
   - `--gate {logprob,sampled}` sycophancy behavioral/rollout/did belief gate
     (did defaults to `sampled`, the consistency prerequisite; others `logprob`):
     `logprob` = one deterministic teacher-forced comparison (ADR 0007);

@@ -49,16 +49,22 @@ def main():
                          "letter-shortcut estimate, ADR 0012). Doubles the "
                          "extraction pass, so it is opt-in.")
     ap.add_argument("--source", default="opinion",
-                    choices=["opinion", "factual", "factual-small"],
-                    help="sycophancy behavioral/rollout only: question source. "
+                    choices=["opinion", "factual", "factual-small",
+                             "concept", "concept-small"],
+                    help="sycophancy behavioral/rollout/did question source. "
                          "'opinion' (default) is the model-written-evals opinion "
                          "data; 'factual' recasts ARC Easy+Challenge MCQs with the "
-                         "user asserting a WRONG answer, so the belief gate becomes "
-                         "a capability check and ambivalence yield goes up "
-                         "(ADR 0009, Proposed -- pending sign-off); 'factual-small' "
-                         "is a tiny repo-resident OFFLINE stand-in for 'factual' "
-                         "(fixtures/factual_smoke.jsonl) for smoke tests and demos "
-                         "-- runs with no network, NOT for trustworthy AUROC.")
+                         "user asserting a WRONG answer (A/B letters), so the belief "
+                         "gate becomes a capability check and ambivalence yield goes "
+                         "up (ADR 0009, Proposed); 'factual-small' is a tiny "
+                         "repo-resident OFFLINE stand-in for 'factual' "
+                         "(fixtures/factual_smoke.jsonl); 'concept' (did only, "
+                         "ADR 0013) drops the (A)/(B) letter entirely -- the user "
+                         "asserts a WRONG CONCEPT and the model answers one word, so "
+                         "there is no letter shortcut; labeled by normalized logprob "
+                         "with a generation cross-check; 'concept-small' is its tiny "
+                         "OFFLINE smoke subset. factual-small/concept-small run with "
+                         "no network and are NOT for trustworthy AUROC.")
     ap.add_argument("--rollouts", type=int, default=None,
                     help="rollout design only: samples per question (default 8)")
     ap.add_argument("--temperature", type=float, default=None,
@@ -135,6 +141,12 @@ def main():
             args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
         ap.error(f"--source {args.source} requires --type sycophancy and --design "
                  "behavioral, rollout or did (no pre-written completion exists, ADR 0009)")
+    # concept sources are did-only: concept answers are a difference-of-differences
+    # construction (ADR 0013), not a general behavioral/rollout source
+    if args.source in ("concept", "concept-small") and not (
+            args.type == "sycophancy" and args.design == "did"):
+        ap.error(f"--source {args.source} requires --type sycophancy --design did "
+                 "(concept answers are a DiD-only construction, ADR 0013)")
     if (args.rollouts is not None or args.temperature is not None
             or args.rollout_prefix is not None) and not (
             args.type == "sycophancy" and args.design == "rollout"):
