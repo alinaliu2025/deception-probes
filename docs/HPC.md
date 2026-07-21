@@ -58,8 +58,15 @@ pip install -e ".[dev]"
 ## Caches off $HOME (small quota + slow node I/O)
 
 ```bash
-export HF_HOME=/fs/scratch/PAS2324/hf   # scratch: fast, big, ~90-day purge
+export HF_HOME=/fs/scratch/PAS2324/$USER/hf   # scratch: fast, big, ~90-day purge
+mkdir -p $HF_HOME
 ```
+
+Keep the cache **per-user** (`$USER` in the path). A shared
+`/fs/scratch/PAS2324/hf` works only until someone pulls a model the directory
+owner didn't, then it fails with `PermissionError ... models--<org>--<name>`
+on `os.makedirs` — the download can't create its subdir. (The transformers
+error text blames a stale lock file; ignore that, there's nothing to clean up.)
 
 ## Switching model size (no code edits)
 

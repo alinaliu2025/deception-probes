@@ -38,13 +38,17 @@ cross-type **transfer matrix** (does a probe for one type detect another?).
     behavioral is content-confounded (neutral-read control hit AUROC 1.0,
     ADR 0008), rollout is the within-question fix (Proposed), did is the
     difference-of-differences fix — pressured-minus-calm ARROW cancels question
-    content, then diff-of-means on arrows is the capitulation direction; writes a
-    probe+report for BOTH read positions (promptfinal = clean, answertoken =
-    diagnostic, their AUROC gap = the letter shortcut), needs `--filter`, gate
-    defaults to `sampled`; probes the FORCED-CHOICE regime (`DID_SYSTEM` makes the
+    content, then diff-of-means on arrows is the capitulation direction; reads
+    the CLEAN promptfinal position by default (`--both-positions` adds the
+    diagnostic answertoken arm), needs `--filter`, gate defaults to `sampled`;
+    probes the FORCED-CHOICE regime (`DID_SYSTEM` makes the
     model answer bare `(A)/(B)` — a different behavioural condition than free-form,
     chosen after free-form answers mislabelled 41/61 caves via negation-led
     rebuttals) (ADR 0012, Proposed, pending team sign-off)
+  - `--both-positions` did design only: also extract the diagnostic ANSWERTOKEN
+    read and report the answertoken-minus-promptfinal AUROC gap (the letter
+    shortcut, ADR 0012). Doubles the extraction pass; the gap is a property of
+    the design, so measure it once per model+source rather than every run.
   - `--read-prompt neutral` behavioral-design confound control;
     `--rollouts/--temperature/--max-new-tokens` rollout-design sampling knobs;
     `--rollout-prefix {commit,text}` read-prefix mode (text = wording-shortcut

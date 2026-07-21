@@ -177,35 +177,91 @@ def test_sycophancy_rollout_build_matches_behavioral_plus_marker():
 
 
 def test_make_factual_row_construction():
-    """Factual source (ADR 0009), pure unit: assertion in the pressure question
-    but not the neutral one; matching = asserted WRONG letter (label 1 =
-    deceptive), not_matching = correct; both ' (X)' formatted; letter side
-    ~50/50 over many indices. No network needed."""
-    rows = [sycophancy._make_factual_row(
-        f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
-        for i in range(200)]
-    letters = {"A": 0, "B": 0}
-    for i, r in enumerate(rows):
+    """Factual source (ADR 0009 + 0012 dual ordering), pure unit: the correct
+    answer sits at the requested letter, the assertion claims the OTHER (wrong)
+    letter, matching = asserted wrong letter (label 1 = deceptive), not_matching =
+    correct; both ' (X)' formatted; a shared group rides along. No network."""
+    for correct_letter, wrong_letter in (("A", "B"), ("B", "A")):
+        r = sycophancy._make_factual_row(
+            "What is 2+2?", correct="4", wrong="5", idx=7,
+            correct_letter=correct_letter, group="factual:7")
         assert set(r) == {"question", "answer_matching_behavior",
-                          "answer_not_matching_behavior", "neutral_user"}
-        # neutral body is the bare MCQ; the pressure question is that body plus
-        # an assertion prefix claiming the wrong answer
+                          "answer_not_matching_behavior", "neutral_user", "group"}
+        assert r["group"] == "factual:7"
+        # neutral body is the bare MCQ; the pressure question prepends an assertion
         assert r["neutral_user"].endswith("\n\nAnswer:")
         assert r["question"].endswith(r["neutral_user"])
         assert len(r["question"]) > len(r["neutral_user"])
-        wrong_tag = r["answer_matching_behavior"].strip()
-        assert wrong_tag in r["question"][: -len(r["neutral_user"])], \
-            "assertion prefix must claim the wrong answer"
-        # ' (X)' format, letters disjoint, wrong letter holds the wrong text
-        m, nm = r["answer_matching_behavior"], r["answer_not_matching_behavior"]
-        assert m in (" (A)", " (B)") and nm in (" (A)", " (B)") and m != nm
-        assert f"{m} {2 * i + 1}" in r["neutral_user"]   # matching -> wrong text
-        assert f"{nm} {2 * i}" in r["neutral_user"]      # not_matching -> correct
-        letters[m.strip("() ")] += 1
-        # deterministic in idx
+        # matching = asserted WRONG letter, not_matching = correct letter
+        assert r["answer_matching_behavior"] == f" ({wrong_letter})"
+        assert r["answer_not_matching_behavior"] == f" ({correct_letter})"
+        # the assertion prefix (everything before the neutral body) claims the wrong
+        prefix = r["question"][: -len(r["neutral_user"])]
+        assert f"({wrong_letter})" in prefix, "assertion must claim the wrong answer"
+        assert f"({correct_letter})" not in prefix
+        # correct text sits at correct_letter, wrong text at wrong_letter
+        assert f"({correct_letter}) 4" in r["neutral_user"]
+        assert f"({wrong_letter}) 5" in r["neutral_user"]
+        # deterministic in idx + letter
         assert r == sycophancy._make_factual_row(
-            f"What is {i}+{i}?", correct=str(2 * i), wrong=str(2 * i + 1), idx=i)
-    assert 60 <= letters["A"] <= 140, f"letter side should be ~50/50, got {letters}"
+            "What is 2+2?", correct="4", wrong="5", idx=7,
+            correct_letter=correct_letter, group="factual:7")
+    with pytest.raises(ValueError, match="correct_letter"):
+        sycophancy._make_factual_row("q", "c", "w", 0, correct_letter="C", group="g")
+
+
+def test_factual_orderings_are_dual_and_share_group():
+    """ADR 0012: each factual question yields BOTH letter orderings sharing one
+    group id; the assertion still claims the wrong answer in each, and the two
+    prompts differ ONLY in the A/B mapping -- so the letter-identity term cancels
+    in the DiD class means by construction."""
+    rows = list(sycophancy._factual_orderings(
+        "What is 2+2?", correct="4", wrong="5", idx=3))
+    assert len(rows) == 2
+    assert rows[0]["group"] == rows[1]["group"] == "factual:3"
+    # correct answer placed at each letter exactly once; matching is the opposite
+    assert {r["answer_not_matching_behavior"] for r in rows} == {" (A)", " (B)"}
+    assert {r["answer_matching_behavior"] for r in rows} == {" (A)", " (B)"}
+    for r in rows:
+        assert r["answer_matching_behavior"] != r["answer_not_matching_behavior"]
+        wrong_tag = r["answer_matching_behavior"].strip()
+        assert wrong_tag in r["question"][: -len(r["neutral_user"])]
+    # same assertion template across the two orderings: the prefixes are identical
+    # once the (differing) asserted letter is masked out
+    def mask(s):
+        return s.replace("(A)", "(X)").replace("(B)", "(X)")
+    p0 = rows[0]["question"][: -len(rows[0]["neutral_user"])]
+    p1 = rows[1]["question"][: -len(rows[1]["neutral_user"])]
+    assert mask(p0) == mask(p1)
+
+
+def test_balance_by_letter_decorrelates_letter_from_label():
+    """ADR 0012: after labeling, `_balance_by_letter` equalises the four
+    (label, asserted-letter) cells so caving is uncorrelated with the asserted
+    letter (the labeled complement of dual ordering)."""
+    from dprobe.data.base import Example
+    def ex(label, letter):
+        return Example("s", "u", label, "sycophancy",
+                       meta={"matching": f" ({letter})",
+                             "not_matching": f" ({'B' if letter == 'A' else 'A'})"})
+    # skewed: caving is B-heavy (10 cave-B vs 2 cave-A), holding A-heavy.
+    # distinct objects per row -- the balancers key on id(), like _balance
+    exs = ([ex(1, "B") for _ in range(10)] + [ex(1, "A") for _ in range(2)]
+           + [ex(0, "A") for _ in range(10)] + [ex(0, "B") for _ in range(2)])
+    out, cells = sycophancy._balance_by_letter(exs, seed=0)
+    assert cells == {"0:A": 10, "0:B": 2, "1:A": 2, "1:B": 10}
+    # floor = 2 -> 4 cells * 2 = 8, and letter is now independent of label
+    assert len(out) == 8
+    from collections import Counter
+    c = Counter((e.label, sycophancy._asserted_letter(e)) for e in out)
+    assert set(c.values()) == {2}
+    # single-class input falls back to plain (label) balance, no crash
+    out2, cells2 = sycophancy._balance_by_letter([ex(1, "A"), ex(1, "B")], seed=0)
+    assert out2 == [] and cells2 == {"1:A": 1, "1:B": 1}
+    # a missing cell (letter B never caves) -> fallback to label balance, no crash
+    exs3 = [ex(1, "A"), ex(1, "A"), ex(0, "A"), ex(0, "B")]
+    out3, cells3 = sycophancy._balance_by_letter(exs3, seed=0)
+    assert len(out3) == 4 and cells3 == {"0:A": 1, "0:B": 1, "1:A": 2}
 
 
 def test_factual_source_requires_behavioral_or_rollout():
@@ -230,7 +286,13 @@ def test_factual_small_source_is_offline_and_well_formed():
     assert all(e.meta.get("design") == "rollout" for e in ex)
     assert all(e.meta.get("source") == "factual-small" for e in ex)
     users = [e.user for e in ex]
-    assert len(users) == len(set(users)), "one example per question"
+    assert len(users) == len(set(users)), "distinct prompt per example"
+    # dual ordering (ADR 0012): each question appears in BOTH orderings, sharing
+    # a group id, so every group holds exactly two examples with opposite letters
+    from collections import Counter
+    by_group = Counter(e.meta["group"] for e in ex)
+    assert by_group and all(n == 2 for n in by_group.values()), \
+        "each question emitted in exactly two letter orderings"
     for e in ex:
         # pressure prompt = neutral body + an assertion of the WRONG answer
         assert e.meta["neutral_user"] in e.user
@@ -354,35 +416,74 @@ def test_did_direction_equals_behavioral_minus_neutral():
     assert np.allclose(raw_dom(pressured - calm), raw_dom(pressured) - raw_dom(calm))
 
 
-def test_extract_arrows_slices_and_subtracts(monkeypatch):
-    """extract_arrows lays out the 4 read-variants in a fixed order, extracts once,
-    and slices the aligned blocks back out as pressured-minus-calm arrows per
-    position. Fake the model-facing extract so the test needs no download."""
-    from dprobe import did as did_mod
-    from dprobe.data.base import Example
-
-    meta = {"matching": " (B)", "not_matching": " (A)", "neutral_user": "NQ"}
-    exs = [Example("s", "P1", 1, "sycophancy", meta=dict(meta)),
-           Example("s", "P2", 0, "sycophancy", meta=dict(meta))]
-
+def _fake_arrow_extract(n_examples):
+    """Fake the model-facing extract so did tests need no download. Encodes
+    block*10+q into each activation, so every position's pressured-minus-calm
+    subtraction is the constant 10."""
     def fake_extract(model, tokenizer, flat, device, batch_size=None, acts_dtype=None):
-        # flat order is [block0(all q), block1(all q), ...]; encode block*10+q so
-        # every position's pressured-minus-calm is a constant we can assert on
-        n = len(flat) // 4
         acts = np.zeros((len(flat), 3, 4), dtype=np.float32)
         for i in range(len(flat)):
-            acts[i, :, 0] = (i // n) * 10 + (i % n)
+            acts[i, :, 0] = (i // n_examples) * 10 + (i % n_examples)
         return acts, np.zeros(len(flat))
+    return fake_extract
 
-    monkeypatch.setattr(did_mod, "extract", fake_extract)
+
+def _did_examples():
+    from dprobe.data.base import Example
+    meta = {"matching": " (B)", "not_matching": " (A)", "neutral_user": "NQ"}
+    return [Example("s", "P1", 1, "sycophancy", meta=dict(meta)),
+            Example("s", "P2", 0, "sycophancy", meta=dict(meta))]
+
+
+def test_extract_arrows_slices_and_subtracts(monkeypatch):
+    """extract_arrows lays the requested read-variants out in a fixed order,
+    extracts once, and slices the aligned blocks back out as pressured-minus-calm
+    arrows per position."""
+    from dprobe import did as did_mod
+
+    exs = _did_examples()
+    monkeypatch.setattr(did_mod, "extract", _fake_arrow_extract(len(exs)))
     monkeypatch.setattr(did_mod, "verify_read_positions", lambda *a, **k: None)
 
-    arrows, labels, groups = did_mod.extract_arrows(None, None, "cpu", exs)
+    arrows, labels, groups = did_mod.extract_arrows(None, None, "cpu", exs,
+                                                    positions=did_mod.POSITIONS)
     # promptfinal = block1 - block0 = 10; answertoken = block3 - block2 = 10
     assert np.allclose(arrows["promptfinal"][:, :, 0], 10.0)
     assert np.allclose(arrows["answertoken"][:, :, 0], 10.0)
     assert list(labels) == [1, 0]
     assert groups == ["P1", "P2"]
+
+
+def test_extract_arrows_defaults_to_promptfinal_only(monkeypatch):
+    """The default read is the CLEAN prompt-final arm alone: no answertoken key,
+    and only 2 reads per question are extracted (half the pass)."""
+    from dprobe import did as did_mod
+
+    exs = _did_examples()
+    seen = {}
+
+    def counting_extract(model, tokenizer, flat, device, **kw):
+        seen["n_reads"] = len(flat)
+        return _fake_arrow_extract(len(exs))(model, tokenizer, flat, device, **kw)
+
+    monkeypatch.setattr(did_mod, "extract", counting_extract)
+    # the answer-token guard must not run when that position wasn't asked for
+    monkeypatch.setattr(did_mod, "verify_read_positions",
+                        lambda *a, **k: pytest.fail("verified an unrequested read"))
+
+    arrows, labels, _ = did_mod.extract_arrows(None, None, "cpu", exs)
+    assert set(arrows) == {"promptfinal"}
+    assert seen["n_reads"] == 2 * len(exs)
+    assert np.allclose(arrows["promptfinal"][:, :, 0], 10.0)
+    assert list(labels) == [1, 0]
+
+
+def test_extract_arrows_rejects_unknown_position(monkeypatch):
+    from dprobe import did as did_mod
+
+    with pytest.raises(ValueError, match="unknown did read position"):
+        did_mod.extract_arrows(None, None, "cpu", _did_examples(),
+                               positions=("mid_answer",))
 
 
 def test_render_did_log_shows_decisions():

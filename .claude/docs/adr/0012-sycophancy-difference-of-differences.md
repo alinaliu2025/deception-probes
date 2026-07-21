@@ -63,8 +63,10 @@ Per question:
 2. **Pressured label, on-policy:** greedily generate the answer under the full
    pressure prompt; the letter it emits is the label — 1 = user-matching
    (`caved`), 0 = honest (`held`). Greedy = deterministic *and* on-policy.
-3. **Two paired reads → two arrows per question** (`arrow = pressured_act −
-   calm_act`, per layer):
+3. **Up to two paired reads → one arrow per read position per question**
+   (`arrow = pressured_act − calm_act`, per layer). Prompt-final is extracted by
+   default; answer-token is opt-in via `--both-positions` (see the addendum
+   below):
    - **prompt-final**: last prompt token, no answer appended. Pre-commitment,
      *predictive*, and carries no committed-letter token, so it is the **clean**
      capitulation direction.
@@ -79,10 +81,11 @@ Per question:
    pressure-response geometry only — an honest measure, not one a topic shortcut
    can inflate. Feeding `arrows` to the existing `layer_sweep` + `report_one_type`
    reuses the whole path unchanged.
-6. **Both read positions get their own report and probe** in the run dir:
+6. **Each extracted read position gets its own report and probe** in the run dir:
    `report_sycophancy_<method>_promptfinal.png` /
    `report_sycophancy_<method>_answertoken.png`, and
-   `probe_promptfinal.npz` / `probe_answertoken.npz`.
+   `probe_promptfinal.npz` / `probe_answertoken.npz`. `meta.json` records which
+   positions were read in `did_read_positions`.
 
 ### Why not letter-balance the answer-token arm?
 
@@ -96,6 +99,53 @@ term, so the **AUROC gap (answer-token − prompt-final) estimates the letter
 shortcut**. Balancing would delete the measurement. The prompt-final arm is the
 direction to trust; the answer-token arm is diagnostic. (Letter-balance stays as
 future work if a clean answer-token direction is ever wanted.)
+
+### Dual letter orderings + asserted-letter balance (amendment, 2026-07-21)
+
+The claim above that "the prompt-final arm has no letter term" was **wrong**, and
+it explains why the first large Qwen2.5-7B `did` run produced a **B-pusher**
+rather than a capitulation direction. The prompt-final arm carries a *different*
+letter term than the answer-token arm: not the *committed* letter (there is no
+committed answer at prompt-final) but the **asserted** letter — the pressure
+prompt literally contains *"I'm pretty sure the answer is (B)…"*, and that token
+is inside every `pressured` endpoint, hence inside every arrow. It only becomes
+the *direction* if the asserted letter correlates with the label, and on Qwen it
+does strongly (it caves far more often when the cave answer is (B); the rollout
+runs measured cave-letter mass like `{A: 100, B: 506}`). The old
+`_balance` was label-only, so `mean(arrow|cave) − mean(arrow|hold)` ≈
+`mean("(B) asserted") − mean("(A) asserted")`. `--permute` does **not** catch
+this: shuffling labels destroys the letter correlation too.
+
+Two-part fix:
+
+1. **Both letter orderings per question** (`_factual_orderings` in
+   `data/sycophancy.py`): every factual question is emitted twice — correct-as-(A)
+   and correct-as-(B) — with the user asserting the WRONG letter in each (so
+   label 1 = caved is unchanged). Both rows share a `group` id (the source
+   question index) that the grouped split keys on, so a question's two orderings
+   never straddle the train/test boundary. This balances the asserted letter in
+   the **dataset**.
+2. **Asserted-letter balance after labeling** (`_balance_by_letter`, replacing the
+   label-only `_balance` in `did_filter`): dual ordering balances the dataset, but
+   the caved/held label is assigned by the model, so a letter-biased model still
+   yields a letter-skewed caved class. Equalising the four
+   `(label, asserted-letter)` cells decorrelates the asserted letter from the
+   label, so the term cancels in the class means. `meta.json`'s `filter_stats`
+   gains `label_letter_cells` (the pre-balance per-cell counts). Falls back to
+   plain label balance if a cell is empty (single class, or a letter that never
+   caves).
+
+This is orthogonal to the answer-token argument above: that balance was declined
+for the *committed*-letter term (to keep the diagnostic gap); this one equalises
+the *asserted*-letter term, which lives in **both** arms and is a pure confound in
+neither's favour. The answer-token gap diagnostic is therefore preserved.
+
+**Scope:** dual ordering is a property of the `factual`/`factual-small` source, so
+`rollout` and `behavioral` runs on that source now also see both orderings —
+harmless (rollout already letter-balances the committed letter; behavioral gains
+letter balance in its questions) and it doubles the raw question count before
+gating. `opinion` source is unaffected (no `group` key → grouping falls back to
+the pressure prompt, balance falls back to `_balance`).
 
 ### Forced-choice answer format (added after the first 7B factual run)
 
@@ -135,6 +185,25 @@ forced-choice `(A)/(B)` is the standard sycophancy-eval setup (Perez et al.
 model-written-evals; Anthropic sycophancy work). Free-form sycophancy (parser fix
 only, verbose answers kept) is the alternative and is left as future work; a run
 must not mix the two.
+
+### Prompt-final by default, answer-token opt-in (addendum)
+
+Originally every `did` run extracted both arms unconditionally. That makes the
+*diagnostic* arm cost the same as the *clean* one on every run: four reads per
+question instead of two, i.e. **2x the extraction pass and 2x the activation
+RAM** — the dominant cost of a large run.
+
+The letter-shortcut gap is a property of the design, not of each run: once
+measured on a given model + source, re-measuring it on every subsequent run buys
+nothing. So the default is now the clean **prompt-final arm alone**, and
+`--both-positions` opts into the answer-token arm and the gap. Nothing about the
+arrows, labels, gate, or the direction estimator changed — a default-position run
+produces the *identical* `probe_promptfinal.npz` it would have before.
+
+Consequences: `meta.json` gains `did_read_positions`, and
+`letter_shortcut_gap` is `null` on runs that read one arm (absent measurement, not
+a zero shortcut). Runs are still comparable on the prompt-final arm; the gap is
+only comparable among `--both-positions` runs.
 
 ## Consequences
 

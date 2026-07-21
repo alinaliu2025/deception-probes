@@ -39,8 +39,15 @@ def main():
                          "'did' is difference-of-differences (ADR 0012, pending "
                          "sign-off): per-question caved/held label, then the "
                          "pressured-minus-calm ARROW cancels question content -- "
-                         "writes a probe+report for BOTH read positions "
-                         "(promptfinal, answertoken) -- requires --filter.")
+                         "reads the clean promptfinal position (add "
+                         "--both-positions for the answertoken diagnostic too) -- "
+                         "requires --filter.")
+    ap.add_argument("--both-positions", action="store_true",
+                    help="did design only: also extract the diagnostic ANSWERTOKEN "
+                         "read alongside the default clean promptfinal one, and "
+                         "report the answertoken-minus-promptfinal AUROC gap (the "
+                         "letter-shortcut estimate, ADR 0012). Doubles the "
+                         "extraction pass, so it is opt-in.")
     ap.add_argument("--source", default="opinion",
                     choices=["opinion", "factual", "factual-small"],
                     help="sycophancy behavioral/rollout only: question source. "
@@ -120,6 +127,10 @@ def main():
     if args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did") and not args.filter:
         ap.error(f"--design {args.design} requires --filter: labels are assigned by "
                  "running the model (build emits the -1 sentinel only)")
+    if args.both_positions and not (
+            args.type == "sycophancy" and args.design == "did"):
+        ap.error("--both-positions only applies to --type sycophancy --design did "
+                 "(no other design has a second read position)")
     if args.source != "opinion" and not (
             args.type == "sycophancy" and args.design in ("behavioral", "rollout", "did")):
         ap.error(f"--source {args.source} requires --type sycophancy and --design "
@@ -225,8 +236,10 @@ def run(args, run_dir):
         return
 
     # group key stays the PRESSURE prompt in both read modes, so the neutral
-    # control reuses the identical held-out split as its paired pressure run
-    groups = [ex.user for ex in examples]
+    # control reuses the identical held-out split as its paired pressure run.
+    # factual rows prefer their shared question id (ADR 0012) so both letter
+    # orderings of a question land in the same split.
+    groups = [ex.meta.get("group", ex.user) for ex in examples]
     if args.read_prompt == "neutral":
         examples = [replace(ex, user=ex.meta["neutral_user"]) for ex in examples]
         print("NEUTRAL-READ CONTROL: extracting on persona-stripped prompts -- "
@@ -297,25 +310,29 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
              filter_stats, filter_log, model_name):
     """The difference-of-differences path (ADR 0012).
 
-    Builds pressure-response arrows at both read positions, then runs the SAME
-    layer-sweep + report on each -- the arrows are the features, so `fit_mms` on
-    them is the capitulation direction. Writes a probe + report per position and
-    records the answer-token-minus-prompt-final AUROC gap (the letter-shortcut
-    estimate) in meta.
+    Builds pressure-response arrows at the requested read positions, then runs
+    the SAME layer-sweep + report on each -- the arrows are the features, so
+    `fit_mms` on them is the capitulation direction. Writes a probe + report per
+    position; with --both-positions it also records the answer-token-minus-
+    prompt-final AUROC gap (the letter-shortcut estimate) in meta.
     """
-    from dprobe.did import POSITIONS, extract_arrows
+    from dprobe.did import DEFAULT_POSITIONS, POSITIONS, extract_arrows
 
-    print(f"extracting DiD arrows for {len(examples)} questions x 4 reads ...")
+    positions_wanted = POSITIONS if args.both_positions else DEFAULT_POSITIONS
+    reads = 2 * len(positions_wanted)
+    print(f"extracting DiD arrows for {len(examples)} questions x {reads} reads "
+          f"({', '.join(positions_wanted)}) ...")
     arrows, labels, groups = extract_arrows(
         model, tokenizer, device, examples,
-        batch_size=args.batch_size, acts_dtype=np.dtype(args.acts_dtype))
+        batch_size=args.batch_size, acts_dtype=np.dtype(args.acts_dtype),
+        positions=positions_wanted)
 
     if args.permute:
         labels = np.random.default_rng(SEED).permutation(labels)
         print("PERMUTATION CONTROL: labels shuffled -- a leak-free pipeline gives AUROC ~0.5")
 
     positions = {}
-    for pos in POSITIONS:
+    for pos in positions_wanted:
         acts = arrows[pos]
         aurocs, best_layer, probe = layer_sweep(
             acts, labels, args.method, args.type, groups, C=args.C)
@@ -334,8 +351,10 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
         print(f"wrote per-question filter log -> {run_dir / 'run_log.txt'}")
 
     # the answer-token arm carries a letter-identity term the clean prompt-final
-    # arm does not, so its excess AUROC estimates the letter shortcut (ADR 0012)
-    gap = positions["answertoken"]["auroc"] - positions["promptfinal"]["auroc"]
+    # arm does not, so its excess AUROC estimates the letter shortcut (ADR 0012).
+    # Only defined when both arms were read; None marks "not measured this run".
+    gap = (positions["answertoken"]["auroc"] - positions["promptfinal"]["auroc"]
+           if len(positions) == 2 else None)
     # stamp the EFFECTIVE generation/gate knobs (did shares ROLLOUT_MAX_NEW_TOKENS)
     # so the run is reproducible from meta, not just the CLI history
     from dprobe.data import sycophancy as _syc
@@ -349,14 +368,16 @@ def _run_did(args, run_dir, model, tokenizer, device, examples,
         "n_label1": int((labels == 1).sum()),
         "n_label0": int((labels == 0).sum()),
         "n_groups": int(len(set(groups))),
+        "did_read_positions": list(positions_wanted),
         "did_positions": positions,
-        "letter_shortcut_gap": float(gap),
+        "letter_shortcut_gap": None if gap is None else float(gap),
         # top-level best_layer/auroc mirror the CLEAN prompt-final arm at a glance
         "best_layer": positions["promptfinal"]["best_layer"],
         "auroc": positions["promptfinal"]["auroc"],
     })
     runlog.write_meta(run_dir, meta)
-    print(f"letter-shortcut gap (answertoken - promptfinal AUROC): {gap:+.3f}")
+    if gap is not None:
+        print(f"letter-shortcut gap (answertoken - promptfinal AUROC): {gap:+.3f}")
     print(f"saved -> {run_dir}")
 
 

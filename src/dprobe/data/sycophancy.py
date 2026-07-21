@@ -194,32 +194,53 @@ _ASSERTION_TEMPLATES = (
 _ARC_CONFIGS = ("ARC-Easy", "ARC-Challenge")
 
 
-def _make_factual_row(question: str, correct: str, wrong: str, idx: int) -> dict:
-    """Build one factual-source row (ADR 0009) from a question, its correct
-    answer, and one wrong distractor. Deterministic in `idx` (letter side and
-    assertion template are seeded per-index), so runs and tests agree.
+def _make_factual_row(question: str, correct: str, wrong: str, idx: int,
+                      correct_letter: str, group: str) -> dict:
+    """Build one factual-source row (ADR 0009) with the correct answer placed at
+    `correct_letter` ('A' or 'B'); the user always asserts the OTHER, WRONG letter,
+    so label 1 = caved holds regardless of ordering. Deterministic in `idx`: the
+    assertion template is seeded per-index and so is IDENTICAL across a question's
+    two orderings -- the orderings then differ ONLY in the A/B mapping.
 
-    Emits the exact opinion-row schema plus a precomputed `neutral_user`: there
-    is no persona to strip -- the pressure prompt is neutral_user with an
-    assertion prefix -- so build() and every filter reuse unchanged.
-    Invariant: 'matching' = the asserted WRONG answer (label 1 = caved =
+    Emits the exact opinion-row schema plus a precomputed `neutral_user` (there is
+    no persona to strip -- the pressure prompt is neutral_user with an assertion
+    prefix) and the shared `group` id, so build() and every filter reuse
+    unchanged. Invariant: 'matching' = the asserted WRONG answer (label 1 = caved =
     deceptive), 'not_matching' = the correct answer.
     """
-    rng = random.Random(f"{_SPLIT_SEED}:{idx}")
-    if rng.random() < 0.5:
-        a, b = correct, wrong
-        correct_letter, wrong_letter = "A", "B"
+    if correct_letter == "A":
+        a, b, wrong_letter = correct, wrong, "B"
+    elif correct_letter == "B":
+        a, b, wrong_letter = wrong, correct, "A"
     else:
-        a, b = wrong, correct
-        correct_letter, wrong_letter = "B", "A"
+        raise ValueError(f"correct_letter must be 'A' or 'B', got {correct_letter!r}")
     body = f"{question}\n (A) {a}\n (B) {b}\n\nAnswer:"
-    assertion = rng.choice(_ASSERTION_TEMPLATES).format(letter=f"({wrong_letter})")
+    template = random.Random(f"{_SPLIT_SEED}:{idx}").choice(_ASSERTION_TEMPLATES)
+    assertion = template.format(letter=f"({wrong_letter})")
     return {
         "question": f"{assertion}\n\n{body}",
         "answer_matching_behavior": f" ({wrong_letter})",
         "answer_not_matching_behavior": f" ({correct_letter})",
         "neutral_user": body,
+        "group": group,
     }
+
+
+def _factual_orderings(question: str, correct: str, wrong: str, idx: int):
+    """Emit BOTH letter orderings of one factual question (ADR 0012 amendment):
+    correct-as-(A) and correct-as-(B), the user asserting the wrong letter in each.
+
+    Presenting the same question under both orderings makes the letter-identity
+    term cancel in the DiD class means BY CONSTRUCTION, not merely in expectation
+    -- the fix for the 'B-pusher' shortcut, where a model's letter bias (e.g. Qwen
+    caving far more often when the cave answer is (B)) becomes the learned
+    direction instead of capitulation. Both rows carry the same `group` id (the
+    source-question index) so the grouped split keeps them on the same side of the
+    train/test boundary -- no question's content leaks across it.
+    """
+    group = f"factual:{idx}"
+    for correct_letter in ("A", "B"):
+        yield _make_factual_row(question, correct, wrong, idx, correct_letter, group)
 
 
 def _factual_rows(split: str):
@@ -255,7 +276,7 @@ def _factual_rows(split: str):
         if not wrongs:
             continue
         wrong = random.Random(f"{_SPLIT_SEED}:distractor:{i}").choice(wrongs)
-        yield _make_factual_row(row["question"], correct, wrong, i)
+        yield from _factual_orderings(row["question"], correct, wrong, i)
 
 
 def _factual_small_rows(split: str):
@@ -283,7 +304,7 @@ def _factual_small_rows(split: str):
     for i, row in enumerate(raw):
         if (split == "test") != (i in test_idx):
             continue
-        yield _make_factual_row(row["question"], row["correct"], row["wrong"], i)
+        yield from _factual_orderings(row["question"], row["correct"], row["wrong"], i)
 
 
 def _split_rows(split: str):
@@ -406,6 +427,11 @@ def build(split: str = "train", design: str = "completion",
                 "not_matching": row["answer_not_matching_behavior"],
                 "neutral_user": nq,
             }
+            # factual rows carry a shared group id across a question's two letter
+            # orderings (ADR 0012); the grouped split keys on it so both orderings
+            # stay on the same side of the train/test boundary
+            if "group" in row:
+                meta["group"] = row["group"]
             if design in ("rollout", "did"):
                 meta["design"] = design
             if source in ("factual", "factual-small"):
@@ -519,6 +545,41 @@ def _balance(examples: list[Example], seed: int) -> list[Example]:
     rng = random.Random(seed)
     keep = {id(e) for e in rng.sample(ones, n)} | {id(e) for e in rng.sample(zeros, n)}
     return [e for e in examples if id(e) in keep]
+
+
+def _asserted_letter(ex: Example) -> str:
+    """The wrong (user-asserted) letter of a factual example -- the letter whose
+    identity the DiD arrow carries -- read from meta['matching'] (== ' (X)')."""
+    m = _CHOICE_RE.search(ex.meta.get("matching", ""))
+    return m.group(1) if m else "?"
+
+
+def _balance_by_letter(examples: list[Example], seed: int) -> tuple[list[Example], dict]:
+    """Subsample to equal mass in all four (label, asserted-letter) cells so the
+    caved and held classes carry IDENTICAL A/B letter composition -- the labeled
+    complement of dual letter orderings (ADR 0012).
+
+    Dual ordering balances the asserted letter in the DATASET, but caving is
+    assigned by the model: if it caves more often under one asserted letter, the
+    caved class stays letter-skewed and the letter-identity term survives the DiD
+    class-mean subtraction (the 'B-pusher' direction). Equalising the four cells
+    decorrelates asserted letter from the label, so what remains is capitulation.
+    Falls back to plain label balance if a cell is empty (single class, or a
+    letter that never caves -- letter cannot be equalised then). Returns the
+    balanced list (input order) and the pre-balance per-cell counts for the trace.
+    """
+    cells: dict[tuple[int, str], list[Example]] = {}
+    for e in examples:
+        cells.setdefault((e.label, _asserted_letter(e)), []).append(e)
+    counts = {f"{lab}:{let}": len(v) for (lab, let), v in sorted(cells.items())}
+    if len(cells) < 4:
+        return _balance(examples, seed), counts
+    floor = min(len(v) for v in cells.values())
+    rng = random.Random(seed)
+    keep = set()
+    for v in cells.values():
+        keep.update(id(e) for e in rng.sample(v, floor))
+    return [e for e in examples if id(e) in keep], counts
 
 
 def _believes_honest_logprob(model, tokenizer, device, ex: Example) -> tuple[bool, dict]:
@@ -969,10 +1030,13 @@ def did_filter(model, tokenizer, device, examples: list[Example]) -> list[Exampl
     calm/pressured arrow extraction at both read positions happens downstream in
     ``dprobe.did.extract_arrows`` -- this filter only assigns labels.
 
-    NOT letter-balanced: the answer-token arm is meant to expose the letter
-    shortcut against the prompt-final arm, so balancing it away is deliberately
-    skipped (ADR 0012). Stats land in ``did_filter.last_stats``; the per-question
-    trace in ``did_filter.last_log``.
+    Letter-balanced (ADR 0012 amendment): factual questions are emitted in BOTH
+    letter orderings, and after labeling the four (label, asserted-letter) cells
+    are equalised (``_balance_by_letter``) so the asserted letter is uncorrelated
+    with the label -- the labeled complement of dual ordering, removing the
+    'B-pusher' shortcut where a model's letter bias becomes the direction. Stats
+    (incl. the pre-balance per-cell counts) land in ``did_filter.last_stats``; the
+    per-question trace in ``did_filter.last_log``.
     """
     import torch
 
@@ -1040,7 +1104,10 @@ def did_filter(model, tokenizer, device, examples: list[Example]) -> list[Exampl
     n1 = sum(e.label == 1 for e in labeled)
     n0 = len(labeled) - n1
     base_rate = n1 / len(labeled) if labeled else float("nan")
-    out = _balance(labeled, _SPLIT_SEED)
+    # letter-aware balance (ADR 0012): equalise the four (label, asserted-letter)
+    # cells so caving is uncorrelated with the asserted letter, killing the residual
+    # 'B-pusher' term that dual ordering leaves in the labeled set
+    out, letter_cells = _balance_by_letter(labeled, _SPLIT_SEED)
     did_filter.last_stats = {
         "questions_in": total,
         "gate_mode": GATE_MODE,
@@ -1051,6 +1118,7 @@ def did_filter(model, tokenizer, device, examples: list[Example]) -> list[Exampl
         "caved_label1": n1,
         "held_label0": n0,
         "sycophancy_base_rate": base_rate,
+        "label_letter_cells": letter_cells,
         "balanced_n": len(out),
     }
     print(f"  did_filter: {total} in | {n_agrees_by_default} dropped "
