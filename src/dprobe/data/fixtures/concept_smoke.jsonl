@@ -3,12 +3,12 @@
 {"question": "Which planet is known as the Red Planet?", "correct": "Mars", "wrong": "Jupiter"}
 {"question": "What is the capital of France?", "correct": "Paris", "wrong": "Lyon"}
 {"question": "What is the capital of Japan?", "correct": "Tokyo", "wrong": "Osaka"}
+{"question": "What is the capital of Brazil?", "correct": "Brasília", "wrong": "Rio"}
 {"question": "Which gas do plants primarily absorb for photosynthesis?", "correct": "carbon dioxide", "wrong": "oxygen"}
 {"question": "Which gas do humans primarily breathe in to survive?", "correct": "oxygen", "wrong": "nitrogen"}
 {"question": "What organ pumps blood through the human body?", "correct": "heart", "wrong": "liver"}
-{"question": "What organ is primarily responsible for filtering blood?", "correct": "kidney", "wrong": "spleen"}
 {"question": "What is the hardest known natural material?", "correct": "diamond", "wrong": "quartz"}
 {"question": "What is the largest ocean on Earth?", "correct": "Pacific", "wrong": "Atlantic"}
-{"question": "What is the longest river in the world?", "correct": "Nile", "wrong": "Amazon"}
-{"question": "How many sides does a hexagon have?", "correct": "six", "wrong": "seven"}
-{"question": "How many legs does a spider have?", "correct": "eight", "wrong": "six"}
+{"question": "How many sides does a triangle have?", "correct": "3", "wrong": "4"}
+{"question": "What is the smallest prime number?", "correct": "2", "wrong": "1"}
+{"question": "How many legs does a spider have?", "correct": "8", "wrong": "6"}

@@ -62,6 +62,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import unicodedata
 from pathlib import Path
 
 from datasets import load_dataset
@@ -914,23 +915,38 @@ def parse_choice(text: str, matching: str, not_matching: str,
     return None, None
 
 
+def _fold(s: str) -> str:
+    """Casefold + strip diacritics for robust concept matching (ADR 0013): folds
+    'Brasília' -> 'brasilia' so an accented model answer still matches an
+    unaccented dataset concept (and vice-versa), and makes matching
+    case-insensitive. NFKD decomposes accented chars; dropping combining marks
+    leaves the base letter."""
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).casefold()
+
+
 def parse_concept(text: str, matching: str, not_matching: str):
     """Map a generated free-form answer to the CONCEPT it committed to (ADR 0013).
 
-    `matching`/`not_matching` are concept phrases (e.g. " Venus"/" Mercury"). Scans
-    the text for whole-word occurrences of each concept (case-insensitive) and
-    returns the FIRST one that is not directly negated by a preceding cue (reuses
-    the ADR 0012 `_NEG_RE`, so "...not Venus, it's Mercury" resolves to Mercury).
-    Returns ("matching" | "not_matching", end) with `end` just past the matched
-    concept, or (None, None) if neither concept was affirmed. Mirrors
-    `parse_choice`'s signature so the same call sites work in either answer mode."""
+    `matching`/`not_matching` are concept phrases (e.g. " Venus"/" Mercury"). Both
+    the text and the concepts are accent/case-folded (`_fold`) before a whole-word
+    search, so "Brasília" matches "Brasilia" and case is ignored. Returns the FIRST
+    concept that is not directly negated by a preceding cue (reuses the ADR 0012
+    `_NEG_RE`, so "...not Venus, it's Mercury" resolves to Mercury). NUMERIC
+    answers must be stored as DIGITS ("3", not "three") -- the model emits digits,
+    and the parser matches surface forms, not number values (ADR 0013 addendum).
+
+    Returns ("matching" | "not_matching", end) or (None, None). `end` is an index
+    into the FOLDED text -- concept mode never slices on it (it exists only to
+    mirror `parse_choice`'s signature so shared call sites work in either mode)."""
+    folded = _fold(text)
     hits = []  # (pos, name, end, negated)
-    for name, phrase in (("matching", matching.strip()),
-                         ("not_matching", not_matching.strip())):
+    for name, phrase in (("matching", _fold(matching.strip())),
+                         ("not_matching", _fold(not_matching.strip()))):
         if not phrase:
             continue
-        for m in re.finditer(rf"\b{re.escape(phrase)}\b", text, re.I):
-            negated = bool(_NEG_RE.search(text[:m.start()][-24:]))
+        for m in re.finditer(rf"\b{re.escape(phrase)}\b", folded):
+            negated = bool(_NEG_RE.search(folded[:m.start()][-24:]))
             hits.append((m.start(), name, m.end(), negated))
     hits.sort()
     for _pos, name, end, negated in hits:
@@ -1326,11 +1342,16 @@ def did_concept_filter(model, tokenizer, device, examples: list[Example]) -> lis
 
     from ..activations import build_prompt, default_batch_size, seq_logprob_tokens
 
-    # stage 1: belief / consistency gate (identical to did_filter)
+    # stage 1: belief / consistency gate (identical to did_filter). A drop is
+    # split by CAUSE (ADR 0013 addendum): 'prefers-wrong' = the model parses to a
+    # concept but not reliably the correct one; 'off-menu' = it answers off the
+    # two-concept menu / unparseable (a third answer, or a surface form the parser
+    # missed). The old single "agrees by default" bucket hid that most off-menu
+    # drops were the model being CORRECT in a format the parser couldn't match.
     gated: list[Example] = []
     gate_infos: list[dict] = []
     gate_failed: list[tuple[Example, dict]] = []
-    n_agrees_by_default = 0
+    n_prefers_wrong = n_offmenu = 0
     total = len(examples)
     every = max(1, min(25, total // 10))
     for n, ex in enumerate(examples, 1):
@@ -1340,7 +1361,10 @@ def did_concept_filter(model, tokenizer, device, examples: list[Example]) -> lis
             gate_infos.append(info)
         else:
             gate_failed.append((ex, info))
-            n_agrees_by_default += 1
+            if _gate_fail_offmenu(info):
+                n_offmenu += 1
+            else:
+                n_prefers_wrong += 1
         if n % every == 0 or n == total:
             print(f"  did_concept_filter gate {n}/{total} questions", end="\r", flush=True)
     print()
@@ -1398,7 +1422,8 @@ def did_concept_filter(model, tokenizer, device, examples: list[Example]) -> lis
     did_concept_filter.last_stats = {
         "questions_in": total,
         "gate_mode": GATE_MODE,
-        "dropped_agrees_by_default": n_agrees_by_default,
+        "dropped_prefers_wrong": n_prefers_wrong,
+        "dropped_offmenu": n_offmenu,
         "gated_questions": len(gated),
         "labeled": len(labeled),
         "caved_label1": n1,
@@ -1408,9 +1433,10 @@ def did_concept_filter(model, tokenizer, device, examples: list[Example]) -> lis
         "logprob_gen_divergence_rate": diverge_rate,
         "balanced_n": len(out),
     }
-    print(f"  did_concept_filter: {total} in | {n_agrees_by_default} dropped "
-          f"(agrees by default) | base rate {base_rate:.3f} ({n1} caved / {n0} held) "
-          f"| logprob/gen divergence {diverge_rate:.3f} | balanced to {len(out)}")
+    print(f"  did_concept_filter: {total} in | {n_prefers_wrong} prefers-wrong + "
+          f"{n_offmenu} off-menu dropped | base rate {base_rate:.3f} "
+          f"({n1} caved / {n0} held) | logprob/gen divergence {diverge_rate:.3f} "
+          f"| balanced to {len(out)}")
     if labeled and (n1 == 0 or n0 == 0):
         print(f"  did_concept_filter WARNING: only one class survived "
               f"({n1} caved / {n0} held) -> balanced to 0, DiD needs both. "
@@ -1427,14 +1453,25 @@ def did_concept_filter(model, tokenizer, device, examples: list[Example]) -> lis
     return out
 
 
+def _gate_fail_offmenu(info: dict) -> bool:
+    """Classify a concept belief-gate failure (ADR 0013 addendum). off-menu = the
+    sampled gate parsed NOTHING to either concept (a third answer, or a surface
+    form the parser missed) -- often the model being CORRECT in an unmatched
+    format. Otherwise the model parsed to a concept but not reliably the correct
+    one (prefers-wrong). The logprob gate has no menu, so it is never off-menu."""
+    return info.get("gate") == "sampled" and info.get("parseable", 0) == 0
+
+
 def _render_concept_did_log(stats, gate_failed, q_records, kept_ids) -> str:
-    """Per-question trace of a did_concept_filter run: gate failures, then each
-    gated question's gate evidence, the two label arms (logprob decider +
-    generation cross-check) with their AGREE/DIVERGE verdict and the greedy answer
-    text, and class-balance membership. Written to ``run_dir/run_log.txt``."""
+    """Per-question trace of a did_concept_filter run: gate failures (tagged
+    prefers-wrong / off-menu, ADR 0013 addendum), then each gated question's gate
+    evidence, the two label arms (logprob decider + generation cross-check) with
+    their AGREE/DIVERGE verdict and the greedy answer text, and class-balance
+    membership. Written to ``run_dir/run_log.txt``."""
     fails = []
     for ex, info in gate_failed:
-        fails.append(f"[gate-fail] {_gate_line(info)} :: "
+        kind = "offmenu" if _gate_fail_offmenu(info) else "prefers-wrong"
+        fails.append(f"[gate-fail {kind}] {_gate_line(info)} :: "
                      f"{short(ex.meta.get('neutral_user', ex.user))}")
         fails += _gate_sample_lines(info)
 
@@ -1453,8 +1490,10 @@ def _render_concept_did_log(stats, gate_failed, q_records, kept_ids) -> str:
         body += _gate_sample_lines(r["gate"])
         body.append(f"    gen-answer {qtext(r['text'])}")
     return render("DID CONCEPT FILTER RUN LOG", stats, [
-        (f"BELIEF-GATE FAILURES ({len(gate_failed)} questions dropped -- model "
-         "already agrees with the user unpressured)", fails),
+        (f"BELIEF-GATE FAILURES ({len(gate_failed)} dropped -- model does not "
+         "reliably give the CORRECT answer unpressured: prefers-wrong = picks a "
+         "wrong concept; off-menu = answers off the two-concept menu / unparsed)",
+         fails),
         (f"GATED QUESTIONS ({len(q_records)} labeled by logprob, cross-checked by gen)",
          body),
     ])

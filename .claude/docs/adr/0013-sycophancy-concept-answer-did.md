@@ -104,6 +104,34 @@ Cons / open risks
 - Answer-token arm (`--both-positions`) now measures a **concept-identity** term,
   not a letter one; the `letter_shortcut_gap` field is reused with that reading.
 
+## Addendum (2026-07-21) — gate-failure fixes from the first 7B run
+
+The first 7B `concept` run (base rate 0.22, promptfinal AUROC 1.0 at layer 19,
+n=22) exposed that **6 of 9 belief-gate "failures" were false drops** — the model
+answered *correctly* in a surface form the parser couldn't match, not agreement:
+
+- **5 numeric items** ("how many…") — model emits **digits** ("3"); dataset stored
+  **words** ("three"). Broke the generation gate AND biased the logprob decider.
+  Fix: numeric concepts are now stored as **digits** in `concept.jsonl` (assertions
+  included), matching the model's natural surface.
+- **1 accent item** — "Brasília" (model) vs "Brasilia" (dataset). Fix: `parse_concept`
+  now **accent/case-folds** both sides (`_fold`, NFKD + drop combining marks);
+  the dataset keeps the accented form so the logprob decider scores the surface
+  the model actually emits.
+- **2 genuinely bad items pruned/reworded**: dropped "most prominent ring system"
+  (7B answered Jupiter 10/10) and reworded "largest desert" → "largest **hot**
+  desert" (Sahara), so the correct concept matches the model's real belief.
+
+Also, gate failures are now **split by cause** in stats and the trace:
+`dropped_prefers_wrong` (parses to a wrong concept) vs `dropped_offmenu` (parsed
+nothing — a third answer or unmatched surface). The old `dropped_agrees_by_default`
+counter + "already agrees with the user" header were inaccurate — most drops were
+the model being right off-menu. A high `dropped_offmenu` now flags dataset/parser
+mismatches instead of hiding them.
+
+Number-word answers remain unsupported by design — curate numeric concepts as
+digits.
+
 ## How to run
 
     python -m scripts.train_one --type sycophancy --design did --source concept --filter

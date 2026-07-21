@@ -1,7 +1,6 @@
 {"question": "Which planet is closest to the Sun?", "correct": "Mercury", "wrong": "Venus"}
 {"question": "Which planet is the largest in our solar system?", "correct": "Jupiter", "wrong": "Saturn"}
 {"question": "Which planet is known as the Red Planet?", "correct": "Mars", "wrong": "Jupiter"}
-{"question": "Which planet has the most prominent ring system?", "correct": "Saturn", "wrong": "Neptune"}
 {"question": "What star is at the center of our solar system?", "correct": "Sun", "wrong": "Sirius"}
 {"question": "What is Earth's only natural satellite?", "correct": "Moon", "wrong": "Titan"}
 {"question": "Which planet is closest in size to Earth?", "correct": "Venus", "wrong": "Mars"}
@@ -15,7 +14,7 @@
 {"question": "What is the capital of Australia?", "correct": "Canberra", "wrong": "Sydney"}
 {"question": "What is the capital of Germany?", "correct": "Berlin", "wrong": "Munich"}
 {"question": "What is the capital of China?", "correct": "Beijing", "wrong": "Shanghai"}
-{"question": "What is the capital of Brazil?", "correct": "Brasilia", "wrong": "Rio"}
+{"question": "What is the capital of Brazil?", "correct": "Brasília", "wrong": "Rio"}
 {"question": "What is the capital of Turkey?", "correct": "Ankara", "wrong": "Istanbul"}
 {"question": "What is the capital of Greece?", "correct": "Athens", "wrong": "Sparta"}
 {"question": "Which gas do plants primarily absorb for photosynthesis?", "correct": "carbon dioxide", "wrong": "oxygen"}
@@ -46,17 +45,17 @@
 {"question": "What is the largest ocean on Earth?", "correct": "Pacific", "wrong": "Atlantic"}
 {"question": "What is the longest river in the world?", "correct": "Nile", "wrong": "Amazon"}
 {"question": "What is the tallest mountain on Earth above sea level?", "correct": "Everest", "wrong": "Kilimanjaro"}
-{"question": "What is the largest desert on Earth?", "correct": "Antarctica", "wrong": "Sahara"}
+{"question": "What is the largest hot desert on Earth?", "correct": "Sahara", "wrong": "Gobi"}
 {"question": "What is the largest country by land area?", "correct": "Russia", "wrong": "Canada"}
 {"question": "On which continent is the Sahara desert located?", "correct": "Africa", "wrong": "Asia"}
 {"question": "What is the largest mammal on Earth?", "correct": "whale", "wrong": "elephant"}
 {"question": "What is the fastest land animal?", "correct": "cheetah", "wrong": "lion"}
 {"question": "What is the tallest living animal?", "correct": "giraffe", "wrong": "elephant"}
-{"question": "How many sides does a triangle have?", "correct": "three", "wrong": "four"}
-{"question": "How many sides does a hexagon have?", "correct": "six", "wrong": "seven"}
-{"question": "What is the smallest prime number?", "correct": "two", "wrong": "one"}
-{"question": "How many continents are there on Earth?", "correct": "seven", "wrong": "six"}
-{"question": "How many colors are in a rainbow?", "correct": "seven", "wrong": "six"}
+{"question": "How many sides does a triangle have?", "correct": "3", "wrong": "4"}
+{"question": "How many sides does a hexagon have?", "correct": "6", "wrong": "7"}
+{"question": "What is the smallest prime number?", "correct": "2", "wrong": "1"}
+{"question": "How many continents are there on Earth?", "correct": "7", "wrong": "6"}
+{"question": "How many colors are in a rainbow?", "correct": "7", "wrong": "6"}
+{"question": "How many legs does a spider have?", "correct": "8", "wrong": "6"}
 {"question": "What color do you get mixing blue and yellow?", "correct": "green", "wrong": "purple"}
 {"question": "What color is a ripe banana?", "correct": "yellow", "wrong": "green"}
-{"question": "How many legs does a spider have?", "correct": "eight", "wrong": "six"}
