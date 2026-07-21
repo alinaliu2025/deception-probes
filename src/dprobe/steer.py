@@ -14,8 +14,12 @@ user asserts the wrong answer):
   probe's layer and measure how often the model flips to the wrong answer. A
   genuine caving direction drives the wrong-answer rate up monotonically with
   alpha; a lexical artifact produces no coherent behavioural push.
-- **ablate** (suppression): on the PRESSURED prompt, project ``v`` out of the
-  residual stream and measure how much the caving rate drops versus baseline.
+- **ablate** (suppression): on the PRESSURED prompt, project ``beta * (h.v) v`` out
+  of the residual stream, sweep beta, and measure how the caving rate falls versus
+  baseline. beta=1 removes the whole component; beta>1 overcorrects. Unlike alpha,
+  beta is dimensionless (it scales a term already in units of h), so it is NOT
+  residual-scaled -- an add-pass alpha and an ablate-pass beta are not on the same
+  footing.
 
 `v` is the probe direction; it reads ``hidden_states[L]`` = the output of decoder
 block ``L`` (index 0 is embeddings), so we intervene on ``model.model.layers[L-1]``.
@@ -78,16 +82,21 @@ def make_add_hook(vec: torch.Tensor, alpha: float):
     return hook
 
 
-def make_ablate_hook(vec: torch.Tensor):
+def make_ablate_hook(vec: torch.Tensor, beta: float = 1.0):
     """Forward hook that projects ``vec`` out of a decoder block's output.
 
-    ``vec`` must be unit norm; h' = h - (h.v) v removes the component along it.
+    ``vec`` must be unit norm; h' = h - beta * (h.v) v scales the removed
+    component. beta=1 is full ablation (component set to 0), 0<beta<1 partial,
+    beta=0 a no-op, beta>1 overcorrects (reflects the component past zero) -- the
+    suppression-side mirror of cranking alpha on the add pass. beta is
+    dimensionless (it multiplies a term already in units of h), so unlike alpha
+    it is NOT scaled by the residual norm.
     """
     def hook(module, inp, out):
         h = out[0] if isinstance(out, tuple) else out
         v = vec.to(dtype=h.dtype, device=h.device)
         coeff = (h * v).sum(dim=-1, keepdim=True)
-        h = h - coeff * v
+        h = h - beta * coeff * v
         return (h,) + tuple(out[1:]) if isinstance(out, tuple) else h
     return hook
 
@@ -299,30 +308,48 @@ def add_sweep(model, tokenizer, probe: Probe, examples: list[Example], device: s
             "scale": scale, "raw": raw, "control": ctrl}
 
 
-def _ablated_caving(model, tokenizer, vec: torch.Tensor, caved: list[SteerItem],
-                    layer: int, device: str, batch_size: int, max_new_tokens: int,
-                    samples: int, temperature: float,
-                    detail: list | None = None) -> float:
-    """Caving rate after projecting ``vec`` (unit) out at ``layer``."""
-    handle = _install(model, layer, make_ablate_hook(vec))
-    try:
-        counts = _classify(model, tokenizer, caved, device, batch_size,
-                           max_new_tokens, samples, temperature, detail=detail)
-    finally:
-        handle.remove()
-    return _wrong_rate(counts)
+def _ablate_curve(model, tokenizer, vec: torch.Tensor, caved: list[SteerItem],
+                  layer: int, betas: list[float], device: str, batch_size: int,
+                  max_new_tokens: int, samples: int, temperature: float,
+                  verbose: bool, tag: str, trace: list | None = None) -> dict:
+    """Sweep beta for one direction over a fixed baseline-caved item set, reporting
+    the caving rate and parse rate after projecting ``beta * (h.v) v`` out at each
+    beta. A causal caving direction makes the caving rate FALL as beta rises to 1
+    (and can drive it below baseline past 1); the parse rate should hold."""
+    caving, parse = [], []
+    for b in betas:
+        detail = [] if trace is not None else None
+        handle = _install(model, layer, make_ablate_hook(vec, b))
+        try:
+            counts = _classify(model, tokenizer, caved, device, batch_size,
+                               max_new_tokens, samples, temperature, detail=detail)
+        finally:
+            handle.remove()
+        cr, pr = _wrong_rate(counts), _parse_rate(counts)
+        caving.append(cr)
+        parse.append(pr)
+        if trace is not None:
+            trace.append({"pass": "ablate", "stage": f"beta={b}", "tag": tag,
+                          "items": detail})
+        if verbose:
+            print(f"    [{tag}] beta={b:>6.3f}  caving_rate={cr:.3f}  "
+                  f"parse_rate={pr:.3f}")
+    return {"caving_rate": caving, "parse_rate": parse}
 
 
 def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device: str,
-                *, samples: int = 1, temperature: float = 0.7,
+                betas: list[float], *, samples: int = 1, temperature: float = 0.7,
                 max_new_tokens: int = 24, batch_size: int | None = None,
                 control: Probe | None = None, verbose: bool = True,
                 trace: list | None = None) -> dict:
     """Suppression pass: on PRESSURED items the model caves on at baseline, project
-    ``v`` out at the probe layer and report the drop in caving rate. If ``control``
-    (a matched random direction) is given, project IT out of the same items too --
-    removing a random direction should barely move caving, so a real necessity claim
-    needs the probe drop to clear the random drop.
+    ``beta * (h.v) v`` out at the probe layer, sweep beta, and report the caving rate
+    AND parse rate at each beta. A causal caving direction makes the caving rate fall
+    as beta climbs toward 1 while the parse rate holds; if ``control`` (a matched
+    random direction) is given, it is ablated over the SAME items at the SAME betas so
+    the two curves compare directly -- removing a random direction should barely move
+    caving, so a real necessity claim needs the probe curve to drop below the random
+    one. ``betas`` are dimensionless (see ``make_ablate_hook``), NOT residual-scaled.
 
     If ``trace`` is a list, per-item events (every completion's full text +
     parse, per stage) are appended to it; render with ``render_steer_log``."""
@@ -342,36 +369,29 @@ def ablate_pass(model, tokenizer, probe: Probe, examples: list[Example], device:
     if verbose:
         print(f"  ablate: {len(caved_pairs)}/{len(items)} items caved at baseline")
     if not caved_pairs:
-        return {"baseline_caving": float("nan"), "ablated_caving": float("nan"),
-                "control_ablated_caving": None, "n_items": 0}
+        return {"betas": betas, "baseline_caving": float("nan"),
+                "caving_rate": [float("nan")] * len(betas),
+                "parse_rate": [float("nan")] * len(betas),
+                "control_caving_rate": None, "n_items": 0}
 
     caved = [it for it, _ in caved_pairs]
     baseline_rate = _wrong_rate([c for _, c in caved_pairs])
-    detail = [] if trace is not None else None
-    ablated_rate = _ablated_caving(model, tokenizer, vec, caved, probe.layer, device,
-                                   batch_size, max_new_tokens, samples, temperature,
-                                   detail=detail)
-    if trace is not None:
-        trace.append({"pass": "ablate", "stage": "ablated", "tag": "probe",
-                      "items": detail})
-    control_rate = None
+    if verbose:
+        print(f"    baseline caving={baseline_rate:.3f}")
+    real = _ablate_curve(model, tokenizer, vec, caved, probe.layer, betas, device,
+                         batch_size, max_new_tokens, samples, temperature,
+                         verbose, tag="probe", trace=trace)
+    ctrl = None
     if control is not None:
         cvec = torch.from_numpy(control.direction.astype(np.float32))
         cvec = cvec / (cvec.norm() + 1e-8)
-        detail = [] if trace is not None else None
-        control_rate = _ablated_caving(model, tokenizer, cvec, caved, probe.layer,
-                                       device, batch_size, max_new_tokens, samples,
-                                       temperature, detail=detail)
-        if trace is not None:
-            trace.append({"pass": "ablate", "stage": "ablated", "tag": "random",
-                          "items": detail})
-    if verbose:
-        print(f"    baseline caving={baseline_rate:.3f}  "
-              f"ablated caving={ablated_rate:.3f}"
-              + (f"  random-ctrl caving={control_rate:.3f}"
-                 if control_rate is not None else ""))
-    return {"baseline_caving": baseline_rate, "ablated_caving": ablated_rate,
-            "control_ablated_caving": control_rate, "n_items": len(caved)}
+        ctrl = _ablate_curve(model, tokenizer, cvec, caved, probe.layer, betas,
+                             device, batch_size, max_new_tokens, samples,
+                             temperature, verbose, tag="random", trace=trace)
+    return {"betas": betas, "baseline_caving": baseline_rate,
+            "caving_rate": real["caving_rate"], "parse_rate": real["parse_rate"],
+            "control_caving_rate": ctrl["caving_rate"] if ctrl else None,
+            "n_items": len(caved)}
 
 
 def _answer_key(it: dict) -> str:

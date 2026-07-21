@@ -917,6 +917,13 @@ def test_steer_hooks_add_and_ablate():
     # the component along v (the 5.0 at dim 1) is removed, the rest untouched
     assert torch.allclose(ablate_out[0][0, 0], torch.tensor([2.0, 0.0, 1.0, 0.0]))
 
+    # beta scales the removed component: beta=0.5 halves it (5.0 -> 2.5),
+    # beta>1 overcorrects past zero (beta=2 reflects 5.0 -> -5.0)
+    half = make_ablate_hook(v, 0.5)(None, None, (h.clone(),))
+    assert torch.allclose(half[0][0, 0], torch.tensor([2.0, 2.5, 1.0, 0.0]))
+    over = make_ablate_hook(v, 2.0)(None, None, (h.clone(),))
+    assert torch.allclose(over[0][0, 0], torch.tensor([2.0, -5.0, 1.0, 0.0]))
+
 
 def test_random_probe_is_unit_and_same_layer():
     """The random control shares the probe's layer but is an independent unit vector."""

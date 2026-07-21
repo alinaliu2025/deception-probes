@@ -77,6 +77,14 @@ def main():
         "instead of scaling by the layer's residual norm.",
     )
     ap.add_argument(
+        "--betas",
+        default="0,0.25,0.5,0.75,0.8,0.85,0.9,0.95,1,1.05,1.1,1.15,1.2,1.25,1.5,2,2.5,3,4",
+        help="comma-separated ablate-pass strengths: each projects "
+        "beta*(h.v)v out at the probe layer. beta=1 removes the whole "
+        "component, beta>1 overcorrects. Dimensionless -- NOT residual-"
+        "scaled (unlike --alphas), so --raw does not apply.",
+    )
+    ap.add_argument(
         "--control",
         default="none",
         choices=["none", "random"],
@@ -159,6 +167,7 @@ def run(args, probe, run_dir):
     print(f"steering on {len(examples)} {args.source} questions ({args.split} split)")
 
     alphas = [float(a) for a in args.alphas.split(",")]
+    betas = [float(b) for b in args.betas.split(",")]
     control = random_probe(probe, SEED) if args.control == "random" else None
     add_result = ablate_result = None
     trace: list = []  # per-item events (full completion texts) for run_log.txt
@@ -187,6 +196,7 @@ def run(args, probe, run_dir):
             probe,
             examples,
             device,
+            betas,
             samples=args.samples,
             temperature=args.temperature,
             max_new_tokens=args.max_new_tokens,
@@ -202,6 +212,11 @@ def run(args, probe, run_dir):
         np.save(
             run_dir / "add_curve.npy",
             np.array([add_result["alphas"], add_result["wrong_rate"]]),
+        )
+    if ablate_result is not None and ablate_result["n_items"]:
+        np.save(
+            run_dir / "ablate_curve.npy",
+            np.array([ablate_result["betas"], ablate_result["caving_rate"]]),
         )
     runlog.write_meta(
         run_dir,
