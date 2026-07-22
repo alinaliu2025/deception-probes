@@ -25,11 +25,18 @@
 # `#SBATCH --constraint=48core` (7B bf16/fp16 ~14GB fits one GPU).
 #SBATCH --job-name=steerlayer-qwen7b
 #SBATCH --account=PAS2324
-#SBATCH --cluster=ascend
-#SBATCH --partition=gpu
+#SBATCH --clusters=ascend      # note: --clusters, not --cluster
+#SBATCH --partition=quad       # 4x A100-80GB, 88 usable cores/node
 #SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
 #SBATCH --gpus-per-node=1
-#SBATCH --time=08:00:00
+# Ascend caps CPUs per job to a share of the node proportional to the GPUs asked
+# for (4 A100 + ~88 cores/node -> ~22 cores/GPU). Without an explicit request the
+# job inherits more than that share and Slurm rejects it with "More processors
+# requested than permitted". 12 cores is plenty for single-GPU inference (CPU only
+# feeds tokenisation/dataloading) and safely under the per-GPU cap.
+#SBATCH --time=04:00:00
 #SBATCH --output=/fs/scratch/PAS2324/deception-probes/results/slurm-%j.out
 
 # Walltime 8h: two costs stack. (1) Labeling the full dual-ordering factual set
