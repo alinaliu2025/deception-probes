@@ -258,11 +258,14 @@ def main():
     ap.add_argument("--gate-n", type=int, default=None,
                     help="--gate sampled only: samples per question (default 20). "
                          "Use 10 to match the did_qwen.sbatch labeling exactly.")
-    ap.add_argument("--alphas", default="1,2,4,8",
-                    help="comma-separated add strengths, each a MULTIPLE of the "
-                         "layer's mean residual norm (so the range is comparable "
-                         "across layers and model sizes). Swept so no layer is "
-                         "judged at a single bad coefficient.")
+    ap.add_argument(
+        "--alphas",
+        default="0,0.25,0.5,0.75,0.8,0.85,0.9,0.95,1,1.05,1.1,1.15,1.2,1.25,1.5,2,2.5,3,4",
+        help="comma-separated add strengths, each a MULTIPLE of the layer's mean "
+             "residual norm -- same scaling and default distribution as "
+             "scripts/steer.py's add pass, so the two are directly comparable. "
+             "The coherent regime is alpha <~1.5 (higher breaks the (A)/(B) "
+             "format); the dense sub-1.25 sampling is where the signal lives.")
     ap.add_argument("--coherence-threshold", type=float, default=0.5,
                     help="minimum coherence ratio (baseline_ppl / steered_ppl) for "
                          "an (layer, alpha) to count as coherent. 0.5 = steered "
