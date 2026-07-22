@@ -21,12 +21,16 @@
 # steer.py cross-dtype caveat does not apply). L*=24 came from a V100 fp16 run;
 # it is only the band CENTRE (band is L*-8..L*+3), so a small bf16 shift in the
 # exact AUROC peak is absorbed. meta.json records model_dtype. To run on Pitzer
-# V100-32GB instead: drop the --cluster/--partition lines, add
-#SBATCH --constraint=48core
+# V100-32GB instead, replace the --clusters/--partition lines below with
+#   "--clusters=pitzer --partition=gpu" and add a "--constraint=48core" line
+#   (Pitzer's 32GB V100s are the 48-core Cascade Lake nodes). Keep that as PROSE
+#   here, not a live #SBATCH directive -- a stray #SBATCH --constraint=48core under
+#   --partition=gpu matches no node and Slurm rejects it with "Requested node
+#   configuration is not available".
 #SBATCH --job-name=steerlayer-qwen7b
 #SBATCH --account=PAS2324
-#SBATCH --clusters=pitzer
-#SBATCH --partition=gpu
+#SBATCH --clusters=ascend
+#SBATCH --partition=quad
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
