@@ -22,11 +22,11 @@
 # it is only the band CENTRE (band is L*-8..L*+3), so a small bf16 shift in the
 # exact AUROC peak is absorbed. meta.json records model_dtype. To run on Pitzer
 # V100-32GB instead: drop the --cluster/--partition lines, add
-# `#SBATCH --constraint=48core` (7B bf16/fp16 ~14GB fits one GPU).
+#SBATCH --constraint=48core
 #SBATCH --job-name=steerlayer-qwen7b
 #SBATCH --account=PAS2324
-#SBATCH --clusters=ascend      # note: --clusters, not --cluster
-#SBATCH --partition=quad       # 4x A100-80GB, 88 usable cores/node
+#SBATCH --clusters=pitzer
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -36,7 +36,7 @@
 # job inherits more than that share and Slurm rejects it with "More processors
 # requested than permitted". 12 cores is plenty for single-GPU inference (CPU only
 # feeds tokenisation/dataloading) and safely under the per-GPU cap.
-#SBATCH --time=04:00:00
+#SBATCH --time=03:00:00
 #SBATCH --output=/fs/scratch/PAS2324/deception-probes/results/slurm-%j.out
 
 # Walltime 8h: two costs stack. (1) Labeling the full dual-ordering factual set
