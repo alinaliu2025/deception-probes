@@ -96,9 +96,10 @@ Architecture Decision Records live in `.claude/docs/adr/`. Use sequential number
 
 ## Conventions
 
-- Model: `config.LOCAL_MODEL` = `allenai/OLMo-2-0425-1B-Instruct` (small, ungated,
+- Model: `config.LOCAL_MODEL` = `Qwen/Qwen2.5-0.5B-Instruct` (small, ungated,
   CPU-friendly) for local smoke runs; `config.OSC_MODEL` =
-  `allenai/OLMo-2-1124-7B-Instruct` on GPU. Resolution order is `--model` >
+  `Qwen/Qwen2.5-7B-Instruct` on GPU. Qwen is the project default (Phase 1 lock).
+  Resolution order is `--model` >
   `$DPROBE_MODEL` > `LOCAL_MODEL`; the resolved id lands in `meta.json`.
   A direction is model-specific: never steer a probe with a model it wasn't
   trained on, and don't compare `best_layer` across models (different depths).
