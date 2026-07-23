@@ -35,12 +35,11 @@
 #SBATCH --job-name=steerlayer-qwen7b-v100
 #SBATCH --account=PAS2324
 #SBATCH --clusters=pitzer
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-exp
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
 #SBATCH --gpus-per-node=1
-#SBATCH --constraint=v100-32g
 #SBATCH --time=06:00:00
 #SBATCH --output=/fs/scratch/PAS2324/deception-probes/results/slurm-%j.out
 
