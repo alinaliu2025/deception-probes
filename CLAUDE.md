@@ -3,6 +3,28 @@
 Persistent context for Claude Code. Loaded at the start of every session. Keep it
 short and factual: project layout, conventions, commands, "always do X" rules.
 
+## ALWAYS DO FIRST: read `TODO.md` and `docs/SCOPE.md`
+
+Every session, before anything else. `TODO.md` has the single next action at the top.
+`SCOPE.md` says what is in scope and what is explicitly deferred until 2026-09-06.
+
+As of 2026-07-26 the project is scoped to **one thing**: in-context scheming on a
+reasoning model (Qwen3-8B), branch `scheming`. Sycophancy, sandbagging, omission,
+eval-awareness, the 3x3 transfer matrix, and the model ladder are all **out of scope**.
+Most of what's below this line describes that deferred work; it is history, not the
+current plan.
+
+New ideas go in the parking lot at the bottom of `SCOPE.md` with a date. Not into the
+branch, and not into a new design.
+
+## Writing voice (read before drafting prose)
+
+When writing anything for Alina (chat, ADRs, docs, comments), follow
+`.claude/docs/writing/anti-ai-writing-style.md` and
+`.claude/docs/writing/voice_profile_alina_liu.md`. Short version: no em dashes, no
+"it's not X, it's Y" reframes, no padded three-item lists, digits not words,
+contractions, plain punctuation, take a stance, stop when the point lands.
+
 ## What this project is
 
 Research code for the lab (PI: Dr. Zhu). We train linear **deception probes** on the
