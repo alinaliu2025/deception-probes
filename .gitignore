@@ -5,6 +5,16 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# macOS junk (was getting committed)
+.DS_Store
+
+# LaTeX build artifacts: keep the .tex and the .pdf, drop the rest.
+# Scoped to docs/ so it can never touch results/runs/*/console.log.
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.synctex.gz
+
 # results: keep the folder, ignore the heavy outputs
 results/*
 !results/.gitkeep
