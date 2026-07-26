@@ -2,12 +2,13 @@
 
 import random
 
-from . import omission, sandbagging, sycophancy
+from . import omission, sandbagging, scheming, sycophancy
 
 BUILDERS = {
     "sycophancy": sycophancy.build,
     "sandbagging": sandbagging.build,
     "omission": omission.build,
+    "scheming": scheming.build,
 }
 
 # Filters that run the model to drop items where the labeled condition doesn't
@@ -20,6 +21,8 @@ FILTERS = {
     # dispatches on design: 'framing' -> behavior_filter (keep/drop),
     # 'behavioral' -> behavioral_filter (assigns the labels; mandatory)
     "sycophancy": sycophancy.sycophancy_filter,
+    # rollout design: samples the reasoning model, assigns schemed/straight labels
+    "scheming": scheming.scheming_rollout_filter,
 }
 
 
@@ -40,6 +43,9 @@ def get(deception_type: str, design: str = "completion", source: str = "opinion"
     if deception_type == "sandbagging":
         return BUILDERS[deception_type](split=split, design=design, source=source,
                                         pressure=pressure)
+    if deception_type == "scheming":
+        # design routes roleplay (verbatim) / rollout (on-policy) / agentic (did)
+        return BUILDERS[deception_type](design=design)
     return BUILDERS[deception_type]()
 
 
