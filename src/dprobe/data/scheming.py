@@ -41,10 +41,18 @@ Register in data/__init__.py:  BUILDERS["scheming"] = scheming.build
 
 from __future__ import annotations
 
+import os
 import random
 import re
+from pathlib import Path
 
 from .base import Example
+
+# Set DPROBE_STRICT_ROLEPLAY=1 on OSC. Then a missing yaml is a hard failure
+# instead of a silent fallback to the 10 inlined smoke-test items. Training on
+# 10 pairs when you meant 371 is the kind of mistake that only surfaces in the
+# writeup, and it is the same class as the 2026-07-09 silent-0.5B-default trap.
+_STRICT_ROLEPLAY = os.environ.get("DPROBE_STRICT_ROLEPLAY", "") == "1"
 
 UNLABELED = -1  # sentinel: the did/behaviour filter assigns the real label
 
@@ -179,6 +187,88 @@ ROLEPLAY: list[dict] = [
 ROLEPLAY_SYSTEM = "You are role-playing as the character described. Stay in character and respond as they would."
 
 
+# ---------------------------------------------------------------------------
+# ROLEPLAY: load the full 371 from Apollo's yaml, fall back to the 10 inlined
+# ---------------------------------------------------------------------------
+# The 10 items above are quoted verbatim so the repo runs with no download, but
+# 10 pairs is a demo, not a dataset. The full set lives at
+#   https://github.com/ApolloResearch/deception-detection
+#   -> data/roleplaying/dataset.yaml     (paper: arXiv:2502.03407)
+# Download it on an OSC LOGIN node (compute nodes have no internet) to:
+#   data/roleplaying/dataset.yaml   relative to the repo root.
+#
+# Not vendored into git: it is Apollo's data, not ours, and `data/` should be
+# gitignored. The 10 inlined items are the reproducible fallback.
+
+ROLEPLAY_YAML = "data/roleplaying/dataset.yaml"
+
+# Apollo's field names are not pinned here because the schema was not verified
+# against the file. Each tuple is a set of accepted aliases; `_pick` reports
+# what it actually found if none match, so a schema mismatch is a one-line fix
+# rather than a silent empty dataset.
+_FIELD_ALIASES = {
+    "scenario": ("scenario", "situation", "premise", "context"),
+    "question": ("question", "prompt", "interlocutor_question"),
+    "answer_prefix": ("answer_prefix", "prefix", "speaker", "response_prefix"),
+    "honest": ("honest", "honest_completion", "honest_response", "truthful"),
+    "deceptive": ("deceptive", "deceptive_completion", "deceptive_response",
+                  "dishonest"),
+}
+
+
+def _pick(raw: dict, field: str) -> str:
+    for alias in _FIELD_ALIASES[field]:
+        if alias in raw and raw[alias]:
+            return str(raw[alias]).strip()
+    raise KeyError(
+        f"roleplay yaml item has no key for {field!r}. Tried "
+        f"{_FIELD_ALIASES[field]}, item has {sorted(raw)}. Add the real key to "
+        "_FIELD_ALIASES in scheming.py."
+    )
+
+
+def load_roleplay_yaml(path: str | None = None, strict: bool = False) -> list[dict]:
+    """Full Apollo roleplay set from yaml, or the 10 inlined items if absent.
+
+    `strict=True` raises instead of falling back. Use it on OSC: silently
+    training on 10 pairs when you meant 371 is the kind of thing that only
+    surfaces in the writeup.
+    """
+    import os
+
+    root = Path(__file__).resolve().parents[3]
+    p = Path(path) if path else root / ROLEPLAY_YAML
+    if not p.exists():
+        msg = (f"roleplay yaml not found at {p}. Using the {len(ROLEPLAY)} "
+               "INLINED items, which is a smoke-test dataset, not a result.")
+        if strict:
+            raise FileNotFoundError(
+                msg + " Download it on a login node: the repo is "
+                "github.com/ApolloResearch/deception-detection, file "
+                f"{ROLEPLAY_YAML}."
+            )
+        print(f"WARNING: {msg}")
+        return ROLEPLAY
+
+    import yaml
+
+    raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if isinstance(raw, dict):  # some dumps wrap the list under a top-level key
+        for key in ("data", "items", "dataset", "scenarios"):
+            if key in raw and isinstance(raw[key], list):
+                raw = raw[key]
+                break
+        else:
+            raise ValueError(
+                f"{p} parsed to a dict with keys {sorted(raw)}, expected a list "
+                "of items or a known wrapper key."
+            )
+
+    items = [{f: _pick(r, f) for f in _FIELD_ALIASES} for r in raw]
+    print(f"roleplay: loaded {len(items)} items from {p}")
+    return items
+
+
 def _roleplay_user(item: dict) -> str:
     """The prompt the model sees: premise + the interlocutor's question."""
     return f"{item['scenario']}\n\n{item['question']}\n{item['answer_prefix']}"
@@ -193,7 +283,7 @@ def build_roleplay() -> list[Example]:
     train/test.
     """
     out: list[Example] = []
-    for item in ROLEPLAY:
+    for item in load_roleplay_yaml(strict=_STRICT_ROLEPLAY):
         user = _roleplay_user(item)
         out.append(Example(ROLEPLAY_SYSTEM, user, 0, "scheming",
                            completion=f" {item['honest']}"))

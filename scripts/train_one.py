@@ -18,7 +18,10 @@ from dprobe.plotting import report_one_type
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--type", required=True, choices=DECEPTION_TYPES)
+    # choices from the BUILDERS registry, not DECEPTION_TYPES: the latter is the
+    # 3 types of the original cross-type study and does not include scheming, so
+    # `--type scheming` was rejected by argparse before it reached data.get
+    ap.add_argument("--type", required=True, choices=sorted(data.BUILDERS))
     ap.add_argument("--method", default="lr", choices=["lr", "mms", "mms_std", "lda"])
     ap.add_argument("--filter", action="store_true",
                     help="run the type's behaviour filter: sandbagging drops "

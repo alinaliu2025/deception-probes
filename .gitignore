@@ -27,6 +27,12 @@ results/runs/**
 !results/runs/**/
 !results/runs/**/meta.json
 
+# Third-party datasets fetched at setup, not ours to redistribute.
+# Anchored with a leading slash so it matches the top-level data/ ONLY and never
+# src/dprobe/data/, which is the package.
+#   data/roleplaying/dataset.yaml  <- Apollo, github.com/ApolloResearch/deception-detection
+/data/
+
 # model/activation caches
 *.npy
 .cache/
