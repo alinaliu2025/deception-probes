@@ -71,15 +71,54 @@ scheme, and it's the same code.
 Your env already exists (`/fs/ess/PAS2324/dprobe-env-alina`, `HF_HOME` set to
 `/fs/scratch/PAS2324/hf`). Three things to add.
 
-**Step 1: download the weights on a LOGIN node.** Compute nodes on OSC generally can't
-reach the internet, so a job that tries to download will hang and then die. Do it once,
-interactively, before you submit anything:
+**Step 0: `module load` FIRST, or nothing else works.** On OSC nothing is on your PATH
+by default. Without `module load miniconda3`, conda doesn't exist, `source activate`
+silently does nothing, the env never activates, and every later command fails with
+`command not found`. Pitzer requires an explicit version; bare `module load miniconda3`
+fails there. This is mistake #2 in `osc-setup-walkthrough.md`'s own
+"so they aren't repeated" list.
 
 ```bash
-ssh <you>@pitzer.osc.edu
-export HF_HOME=/fs/scratch/PAS2324/hf
+module spider miniconda3                      # lists available versions
+module load miniconda3/<version>              # the version is REQUIRED on Pitzer
+export PYTHONNOUSERSITE=True                  # block stray ~/.local packages
 source activate /fs/ess/PAS2324/dprobe-env-alina
-hf download Qwen/Qwen3-8B
+cd /fs/ess/PAS2324/dprobe-alina               # the CODE dir, not the env dir
+
+echo $CONDA_PREFIX   # -> /fs/ess/PAS2324/dprobe-env-alina
+echo $HF_HOME        # -> /fs/scratch/PAS2324/hf  (set in ~/.bashrc, walkthrough 3.5)
+```
+
+Note the two near-identical paths. `dprobe-alina` is the git clone you work in.
+`dprobe-env-alina` is the conda environment. Do not `cd` into the env.
+
+**Step 1: download the weights on a LOGIN node.** Compute nodes on OSC generally can't
+reach the internet, so a job that tries to download will hang and then die. Do it once,
+interactively, before you submit anything.
+
+Everything lands in `$HF_HOME`, so Qwen2.5-7B and Qwen3-8B share one cache and you never
+pass a path to your code, only the repo id. Existing downloads:
+`ls /fs/scratch/PAS2324/hf/hub`. Scratch is purged ~90 days, so an empty listing means
+re-download, not a bug.
+
+```bash
+huggingface-cli download Qwen/Qwen3-8B
+```
+
+The CLI was renamed `huggingface-cli` -> `hf` in huggingface_hub 0.34. The OSC env
+predates that, so use `huggingface-cli` there. If neither name works, skip the CLI:
+
+```bash
+# small check first: confirms the repo id exists AND gives the layer count,
+# without pulling 16GB
+python -c "
+from huggingface_hub import hf_hub_download
+import json
+c = json.load(open(hf_hub_download('Qwen/Qwen3-8B', 'config.json')))
+print('layers:', c['num_hidden_layers'], '| hidden:', c['hidden_size'])
+"
+
+python -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-8B')"
 ```
 
 That's roughly 16GB. `/fs/scratch` is purged on a cycle, so if a run months from now
