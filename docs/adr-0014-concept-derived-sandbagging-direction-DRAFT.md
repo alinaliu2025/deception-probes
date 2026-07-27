@@ -92,6 +92,14 @@ disclosure into the motivation for the next experiment.
    is not optional.
 5. **Bootstrap CIs** on every AUROC cell. Bare point estimates are what the 07-26 critique
    flagged.
+6. **Second judge.** Rebuild the direction with a different judge model and report the
+   cosine between the two. This measures the live risk directly instead of arguing about
+   it: if the direction moves when the judge changes, the vector encodes the judge's
+   opinion. Primary is `claude-sonnet-5`, second is `gpt-5.4-2026-03-05`. Both differ in
+   family from each other and from the subject model, which is what rules out
+   `qwen3-32b` as a check on Qwen2.5-7B. Both support `temperature=0` and both are
+   pinned rather than preview, so the cached scores stay reproducible for the length of
+   the study. Costs one extra extraction and no extra generation.
 
 ## Why the 5 past failure modes do not apply
 

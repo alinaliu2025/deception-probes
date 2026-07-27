@@ -100,6 +100,78 @@ def test_judge_prompt_carries_rubric_and_response():
     assert "MARKER_TEXT" in seen["prompt"]
 
 
+# --- capability pairing ----------------------------------------------------
+
+def _paired(questions, n_per_pole=12):
+    return [{"pole": p, "system": f"{p}-sys", "user": q, "response": f"{p}{k}"}
+            for q in questions for p in ("pos", "neg")
+            for k in range(n_per_pole)]
+
+
+def _grader(control_correct: dict, pressured_correct: dict):
+    """Fake correctness judge driven by two per-question lookup tables.
+
+    Keys off the RESPONSE text, because `build_correctness_prompt` deliberately
+    does not show the judge the system prompt. Telling a correctness grader which
+    condition produced an answer would bias the grading, which is the confound
+    the pairing exists to avoid."""
+    def score(prompt: str) -> int:
+        q = next(l for l in prompt.splitlines() if l.startswith("q"))
+        resp = prompt.split("Assistant answer:\n")[1].split("\n")[0]
+        table = control_correct if resp.startswith("neg") else pressured_correct
+        return 100 if table.get(q, False) else 0
+    return score
+
+
+def test_capability_filter_drops_questions_the_model_never_knew():
+    """A wrong answer from a model that never knew the answer is ignorance, not
+    sandbagging. CLAUDE.md requires this filter for the sandbagging type."""
+    spec = ConceptSpec.load()
+    qs = ["q1", "q2", "q3", "q4"]
+    recs = _paired(qs)
+    # control fails q3 entirely -> q3 must be dropped for BOTH poles
+    score = _grader({"q1": True, "q2": True, "q3": False, "q4": True}, {})
+    kept = concept.capability_pair_filter(recs, spec, score, verbose=False)
+    assert all(r["user"] != "q3" for r in kept)
+    assert {r["user"] for r in kept} == {"q1", "q2", "q4"}
+
+
+def test_poles_are_pressured_wrong_versus_control_right():
+    spec = ConceptSpec.load()
+    recs = _paired(["q1", "q2", "q3"])
+    score = _grader({"q1": True, "q2": True, "q3": True}, {})
+    kept = concept.capability_pair_filter(recs, spec, score, verbose=False)
+    assert all(r["correct"] <= 0 for r in kept if r["pole"] == "pos")
+    assert all(r["correct"] >= 100 for r in kept if r["pole"] == "neg")
+
+
+def test_a_compliant_model_yields_no_positive_pole():
+    """If the pressure systems do not work, every pressured answer is correct and
+    the positive pole is empty. That must abort, not build a direction out of the
+    handful that happened to be wrong."""
+    spec = ConceptSpec.load()
+    recs = _paired(["q1", "q2", "q3"])
+    score = _grader({"q1": True, "q2": True, "q3": True},
+                    {"q1": True, "q2": True, "q3": True})
+    with pytest.raises(ValueError, match="too few survivors"):
+        concept.capability_pair_filter(recs, spec, score, verbose=False)
+
+
+def test_correctness_prompt_requires_a_rubric():
+    spec = ConceptSpec.load()
+    spec.correctness_rubric = ""
+    with pytest.raises(ValueError, match="no `correctness_rubric`"):
+        concept.build_correctness_prompt(spec, {"user": "u", "response": "r"})
+
+
+def test_correctness_prompt_tells_the_judge_to_ignore_length():
+    """The 0.5B run failed because the judge scored terseness. Both rubrics now
+    say so explicitly; if that sentence is ever dropped, this fails."""
+    spec = ConceptSpec.load()
+    assert "not its length" in spec.correctness_rubric
+    assert "Do not infer intent from brevity" in spec.judge_rubric
+
+
 # --- direction -------------------------------------------------------------
 
 def test_fit_concept_recovers_planted_direction():
@@ -133,6 +205,32 @@ def test_layer_sweep_finds_the_planted_layer():
     probes, seps = concept.layer_sweep_concept(acts, poles, "sandbagging")
     assert len(probes) == acts.shape[1]
     assert int(np.argmax(seps)) == 2
+
+
+def test_layer_selection_is_not_fooled_by_growing_activation_norm():
+    """Regression, 2026-07-27. Residual norms grow with depth in a transformer.
+    A separation metric measured in raw units climbs with the layer index whether
+    or not the layer carries signal, so argmax lands on the last layer every time.
+    The first 0.5B run picked layer 24 of 24 that way.
+
+    Here layer 4 has 50x the scale of every other layer and NO planted signal,
+    while layer 2 has the signal. A scale-free metric picks 2."""
+    acts, poles = _poled(planted=2)
+    acts[:, 4, :] *= 50.0
+    _, seps = concept.layer_sweep_concept(acts, poles, "sandbagging")
+    assert int(np.argmax(seps)) == 2, (
+        f"layer selection followed activation scale, not signal: {seps.round(2)}"
+    )
+
+
+def test_separation_is_invariant_to_rescaling_a_layer():
+    """The same statement as a property: multiplying a layer by a constant must
+    not change its separation score."""
+    acts, poles = _poled(planted=2)
+    _, before = concept.layer_sweep_concept(acts, poles, "sandbagging")
+    acts[:, 2, :] *= 7.0
+    _, after = concept.layer_sweep_concept(acts, poles, "sandbagging")
+    assert np.isclose(before[2], after[2], rtol=1e-6)
 
 
 def test_score_fixed_direction_does_not_refit():

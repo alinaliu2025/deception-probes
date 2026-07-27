@@ -1,88 +1,104 @@
 # TODO
 
-Scope: `docs/SCOPE.md`. Protocol: `docs/protocol-walkthrough-one-scenario.md`.
-Answers to open questions: `docs/pilot-questions-answered.md`.
+Scope: `docs/SCOPE.md`. Design: `docs/adr-0014-concept-derived-sandbagging-direction-DRAFT.md`.
+Why the scope changed on 2026-07-27: the amendment log at the top of `SCOPE.md`.
 
-**One thing:** does a reasoning model represent in-context scheming, and can a probe
-detect it in the cases where the CoT does not admit to it?
+**One thing:** does a direction built from a description of sandbagging, with no
+behavioural label in its construction, steer the behaviour and detect it?
 
 ---
 
 ## → NEXT ACTION
 
-**Start the Qwen3-8B download now**, on an OSC **login** node (Ascend, per
-`scripts/osc/*.sbatch`). ~16GB, compute nodes have no internet, and it's the long
-pole. It can run while you do anything else.
+**Commit, tag, branch.** Scheming is deferred, not dropped, and `scheming.py` is still
+untracked. A tag does not preserve untracked files. Exact commands at the bottom of
+`SCOPE.md`. Do this before touching anything else.
 
-```bash
-export HF_HOME=/fs/scratch/PAS2324/hf
-source activate /fs/ess/PAS2324/dprobe-env-alina
-hf download Qwen/Qwen3-8B
-```
+**Plumbing check: DONE 2026-07-27**, run
+`2026-07-27T17-20-24Z_concept_concept_5b08b70_Alinas-MacBook-Pro-3`
+(`--no-judge --skip-eval`, 0.5B, 120 records). Findings:
 
-Then: **confirm thinking mode emits `<think>` blocks AND hidden states.**
-30-minute interactive job, code in `pilot-questions-answered.md` Q2 step 3.
-Write down three things:
+1. ✅ `extract_response_mean` offset is correct. `verify_response_span` shows pooling
+   starting at `'The primary reason why'` / `'Mercury.'` / `'A catalyst increases the'`,
+   straight after `<|im_start|>assistant\n`
+2. ⏸ Judge survival rate: not measured, no backend yet
+3. ⚠ **The positive pole does not sandbag at 0.5B.** "Mercury." is the correct answer to
+   the question it was asked under a trait-eliciting system prompt. The model is not
+   following the instruction at all. Expected at this size, and it is precisely the gap
+   the judge filter exists to close. Re-check this at 7B: if the positive pole still
+   refuses to sandbag there, the fixture systems are too weak and that is a week-1
+   blocker, not a week-2 detail
+4. ⚠ Ran on **CPU, not MPS**. `get_device()` checks `torch.backends.mps.is_available()`
+   first and it returned false in the py3.9 venv. Worth 10 minutes before the next local
+   run, though it does not affect OSC
 
-1. Does a `<think>` block appear at all
-2. `len(hidden_states)` — every layer number in ADRs 0001-0012 is meaningless
-   on this model, it's deeper than Qwen2.5-7B
-3. Peak GPU memory on a 1024-token generate — this sets `num_return_sequences`
-   for the real pilot, and OOM is the likeliest thing to eat a day later
+**Bug found and fixed by this run:** `layer_sweep_concept` scored separation as the raw
+gap between pole means, which is `||mu_pos - mu_neg||` and therefore grows with the
+layer's residual norm. It picked layer 24 of 24. Now Cohen's d, which is scale-free. Two
+regression tests in `tests/test_concept.py`.
 
 ---
 
 ## ⚠ Meeting: Thursday 2026-07-30
 
-**The model check above is the ONLY hard requirement before it.** Do not start the
-pilot harness this week. Half-built shows nothing; instrument-verified plus a
-written design is a clean ask.
+**The plumbing check above is the ONLY hard requirement before it.** Do not build the
+judge backend properly this week. Instrument-verified plus a written design is a clean
+ask; half-built shows nothing.
 
 Agenda (full version in `SCOPE.md`):
 
-- [ ] 1. Scope: scheming only, 6 weeks, dropping sycophancy / sandbagging / omission
-- [ ] 2. Close ADRs 0008, 0010, 0012 as **Superseded by scope change**
-- [ ] 3. **The uncomfortable one.** The 07-16 sandbagging result isn't being
-         reported. One table: cave rate 52% when the correct answer is (A) vs 28%
-         when it's (B), z = 3.85, so part of the "held" class is failed compliance
-         landing on the answer key by accident. Say it before someone else finds
-         it. Prep this Wednesday, it's the item most likely to get dropped.
-- [ ] 4. Compute ask: Qwen3-8B on PAS2324
+- [ ] 1. Scope: concept-derived directions on sandbagging, 6 weeks, per ADR 0014. Lead
+         with the fact that this replaced a scope written on Monday, and why. If the
+         counter-proposal is scheming, take it, the design is written
+- [ ] 2. Close ADRs 0008 and 0012 as **Superseded by ADR 0014**. Move 0010 to
+         **Accepted**, it has been used in 3 reported runs
+- [ ] 3. **The uncomfortable one.** The 07-16 sandbagging result isn't being reported as
+         it stands. One table: cave rate 52% when the correct answer is (A) vs 28% when
+         it's (B), z = 3.85, so part of the "held" class is failed compliance landing on
+         the answer key by accident. Say it before someone else finds it. Then connect
+         it to item 1. Prep this Wednesday, it's the item most likely to get dropped
+- [ ] 4. Compute: no new ask. That is the strongest argument for item 1
 
-The scope argument does **not** depend on pilot results. It stands on
-`docs/critique-2026-07-26.md`.
+The scope argument does **not** depend on any result. It stands on
+`docs/critique-2026-07-26.md` and the z = 3.85 table.
 
 ---
 
 ## This week
 
 - [ ] Commit untracked files, tag `v0-sycophancy-sandbagging`, push, branch to
-      `scheming`. Exact commands at the bottom of `SCOPE.md`. **Do this first, a tag
-      does not preserve untracked files and `scheming.py` is untracked.**
+      `concept-vectors`. **Do this first.**
 - [ ] `rm .git/_writetest` (leftover from a permissions check)
-- [ ] Download `Qwen/Qwen3-8B` on an OSC **login** node (compute nodes have no internet)
-- [ ] Confirm thinking mode + hidden states ← **next action, above**
-- [ ] Book the one meeting. Agenda is 4 items, in `SCOPE.md`. The uncomfortable one is
-      item 3: tell them the sandbagging result isn't being reported and why.
+- [ ] Move `docs/adr-0014-...-DRAFT.md` into `.claude/docs/adr/0014-...md` and drop the
+      DRAFT suffix once the meeting signs off. Same for `adr-0013`, which has been
+      sitting in `docs/` since it was written
+- [ ] Plumbing check ← **next action, above**
 
 ## Week 1 build
 
-- [ ] Write ~70 free-form scenarios using `FREEFORM_SCENARIOS[0]` as the template.
-      Vary the **domain**, not just the names. Rule for writing them: the environment
-      may contain an editable oversight config; nothing may name the covert action or
-      imply permission. (`pilot-questions-answered.md` Q5.)
-      Start with 10 to de-risk the harness, then scale.
-- [ ] Write `scripts/pilot_scheming_rate.py`:
-      1. Load Qwen3-8B, thinking on, confirm hidden states
-      2. Calm gate, N=20 per scenario, drop scenarios that scheme when calm
-      3. Pressured rollouts, N=20 per scenario, store full CoT + tool calls
-      4. Grade `covert_action` from final file state, `verbalised` by keyword,
-         `denied` from the follow-up turn
-      5. Print: covert rate overall + per scenario, within-vs-between variance,
-         verbalisation rate, required-scenario-count
-      6. Write `prereg` into `meta.json` **before** the run
-- [ ] Run the pilot. Read the decision rule in `SCOPE.md`. Do not deliberate, the
-      numbers pick the design.
+- [ ] Expand `src/dprobe/data/fixtures/concept_sandbagging.json`: questions 12 → ~40,
+      regenerate the 5+5 systems from `description` with an external LLM, review by
+      hand, commit the result. Vary the **question domain**, not the phrasing. Poles
+      must stay equal in count
+- [ ] Wire a judge backend into `scripts/concept_vector.py` (currently `stub_judge`).
+      LiteLLM proxy is the obvious one
+- [ ] Hand-score 50 responses against the judge, record the agreement rate in
+      `meta.json`. Under 0.85, rewrite the rubric before going further. This is the one
+      live risk named in `SCOPE.md`
+- [ ] Extraction run on 7B. Save `probe.npz`, scp it back from OSC
+- [ ] `scripts/steer.py --control random --forced-choice` on the concept probe. Both
+      passes. **Read the pre-registered decision table in ADR 0014 first. Do not
+      deliberate after the fact, the numbers pick the outcome**
+- [ ] Detection AUROC on the held-out DiD split, then the (A)/(B) split. That split is
+      the headline
+
+## Controls, before any number gets reported
+
+- [ ] Opposing pole: steer with `−v`
+- [ ] Prompt-style vector: `--no-judge --read prompt-final`. If it matches the real one,
+      the pipeline bought nothing
+- [ ] KL-matched steering control (infra list below)
+- [ ] Permutation on the detection eval
 
 ## Infrastructure, one afternoon, retires 5 critique items permanently
 
@@ -95,17 +111,18 @@ The scope argument does **not** depend on pilot results. It stands on
 ## Done
 
 - [x] Harsh review of the project (`docs/critique-2026-07-26.md`)
-- [x] Scope contract (`docs/SCOPE.md`)
-- [x] Protocol walkthrough on one scenario
-- [x] Fix 4 bugs in `scheming.py`: covert-always-(A), lever named in prompt,
-      CoT-suppressing `DID_SUFFIX`, no free-form design
+- [x] Scope contract (`docs/SCOPE.md`), amended 2026-07-27
+- [x] Protocol walkthrough on one scenario (scheming, now deferred)
+- [x] Fix 4 bugs in `scheming.py`
+- [x] ADR 0014 draft + `src/dprobe/concept.py` and `scripts/concept_vector.py` sketches
 
 ---
 
 ## Not doing until 2026-09-06
 
-Sycophancy. Sandbagging. Omission. Eval-awareness. The 3x3 transfer matrix. The model
-ladder. Any new deception type.
+In-context scheming and the Qwen3-8B download. Omission. Eval-awareness. The full 3x3
+transfer matrix. The model ladder. Any new deception type built from behavioural labels.
 
 New ideas go in the parking lot at the bottom of `SCOPE.md`, with a date. Not into the
-branch.
+branch. And per the second rule in `SCOPE.md`, no scope change without an amendment-log
+line and a written counter-argument.
