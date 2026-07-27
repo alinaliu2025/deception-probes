@@ -16,7 +16,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# `scripts/` is not an installed package (no __init__.py, it holds entry points
+# run as `python -m scripts.foo`). tests/test_crosstype_did.py imports from it,
+# which works under `python -m pytest` (cwd lands on sys.path) and fails under a
+# bare `pytest`. Pinning the repo root here makes both invocations behave the
+# same, so a green suite means the same thing however it was launched.
+pythonpath = ["."]
+testpaths = ["tests"]
