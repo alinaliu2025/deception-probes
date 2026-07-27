@@ -10,10 +10,47 @@ detect it in the cases where the CoT does not admit to it?
 
 ## → NEXT ACTION
 
-**Confirm Qwen3-8B thinking mode emits `<think>` blocks AND hidden states, on OSC.**
-30-minute interactive job. Code is in `pilot-questions-answered.md` Q2 step 3.
-Write down `len(hidden_states)`, because every layer number in ADRs 0001-0012 is
-meaningless on this model.
+**Start the Qwen3-8B download now**, on an OSC **login** node (Ascend, per
+`scripts/osc/*.sbatch`). ~16GB, compute nodes have no internet, and it's the long
+pole. It can run while you do anything else.
+
+```bash
+export HF_HOME=/fs/scratch/PAS2324/hf
+source activate /fs/ess/PAS2324/dprobe-env-alina
+hf download Qwen/Qwen3-8B
+```
+
+Then: **confirm thinking mode emits `<think>` blocks AND hidden states.**
+30-minute interactive job, code in `pilot-questions-answered.md` Q2 step 3.
+Write down three things:
+
+1. Does a `<think>` block appear at all
+2. `len(hidden_states)` — every layer number in ADRs 0001-0012 is meaningless
+   on this model, it's deeper than Qwen2.5-7B
+3. Peak GPU memory on a 1024-token generate — this sets `num_return_sequences`
+   for the real pilot, and OOM is the likeliest thing to eat a day later
+
+---
+
+## ⚠ Meeting: Thursday 2026-07-30
+
+**The model check above is the ONLY hard requirement before it.** Do not start the
+pilot harness this week. Half-built shows nothing; instrument-verified plus a
+written design is a clean ask.
+
+Agenda (full version in `SCOPE.md`):
+
+- [ ] 1. Scope: scheming only, 6 weeks, dropping sycophancy / sandbagging / omission
+- [ ] 2. Close ADRs 0008, 0010, 0012 as **Superseded by scope change**
+- [ ] 3. **The uncomfortable one.** The 07-16 sandbagging result isn't being
+         reported. One table: cave rate 52% when the correct answer is (A) vs 28%
+         when it's (B), z = 3.85, so part of the "held" class is failed compliance
+         landing on the answer key by accident. Say it before someone else finds
+         it. Prep this Wednesday, it's the item most likely to get dropped.
+- [ ] 4. Compute ask: Qwen3-8B on PAS2324
+
+The scope argument does **not** depend on pilot results. It stands on
+`docs/critique-2026-07-26.md`.
 
 ---
 
