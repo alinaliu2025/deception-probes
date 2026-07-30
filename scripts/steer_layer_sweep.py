@@ -370,6 +370,19 @@ def main():
                     help="sampling temperature when --samples > 1.")
     ap.add_argument("--max-new-tokens", type=int, default=24,
                     help="generation cap per completion (must reach the '(X)').")
+    ap.add_argument("--dump-layers", default=None,
+                    help="comma-separated band layers whose raw diff-in-means "
+                         "direction to save as probe_L<L>.npz in the run dir "
+                         "(same format train_one writes), so scripts/steer.py can "
+                         "ablate/add at a chosen STEERING layer -- the sweep "
+                         "otherwise only reports, never persists, its directions. "
+                         "Layers outside the swept band are an error.")
+    ap.add_argument("--dump-only", action="store_true",
+                    help="with --dump-layers: save the requested directions and "
+                         "exit BEFORE the causal-eval generation loop. Turns a "
+                         "full sweep into a cheap 'just give me the L20 probe' "
+                         "pass (one extraction over the labeled train set, no "
+                         "per-(layer,alpha) generation).")
     ap.add_argument("--max-train", type=int, default=None,
                     help="cap the number of TRAIN questions used to build the "
                          "directions (random whole-prompt subsample) for speed.")
@@ -446,6 +459,27 @@ def run(args, run_dir):
     directions = {L: torch.from_numpy(
         fit_mms(feats[:, L, :], labels, L, "sycophancy").direction.astype(np.float32))
         for L in band}
+
+    # ---- 2b. optional: persist chosen band directions as probe.npz ----
+    # The sweep normally only *reports* its directions; --dump-layers writes the
+    # raw diff-in-means probe for one or more band layers so scripts/steer.py can
+    # ablate/add at a STEERING layer (e.g. L20) rather than the detection L*.
+    if args.dump_layers:
+        want = [int(x) for x in args.dump_layers.split(",")]
+        outside = [L for L in want if L not in band]
+        if outside:
+            raise ValueError(
+                f"--dump-layers {outside} outside swept band {lo}..{hi}; widen "
+                "--n-before/--n-after or pick a band layer")
+        for L in want:
+            p = fit_mms(feats[:, L, :], labels, L, "sycophancy")
+            path = run_dir / f"probe_L{L}.npz"
+            np.savez(path, direction=p.direction, bias=p.bias, layer=p.layer,
+                     method=p.method, deception_type=p.deception_type)
+            print(f"  dumped {args.direction} direction -> {path}")
+        if args.dump_only:
+            print("--dump-only: skipping causal eval")
+            return
 
     # ---- 3a. TEST split; ONE baseline generation selects each pass's targets ----
     eval_examples = data.get("sycophancy", design=args.direction, source=args.source,
